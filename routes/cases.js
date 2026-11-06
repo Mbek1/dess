@@ -20,9 +20,14 @@ const { syncCaseChatParticipants } = require('../utils/case-chat');
 router.use(authenticateToken);
 
 // Multer setup for closure document uploads
+const closureUploadDir = path.join(__dirname, '..', 'uploads');
+// Render deployments may not contain empty upload directories from Git.
+// Create the directory before Multer attempts to write closure documents.
+fs.mkdirSync(closureUploadDir, { recursive: true });
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, path.join(__dirname, '../uploads'));
+    cb(null, closureUploadDir);
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -387,16 +392,25 @@ router.post('/:id/close', requireInvestigatorCaseAccess, upload.array('documents
     }
 
     await caseItem.save();
-    await notifyCaseTeam(caseItem, {
-      actorId: closer._id,
-      actorName: closer.name,
-      kind: 'CASE_CLOSED',
-      title: 'Case closed',
-      body: `${closer.name} closed ${caseItem.caseId} and uploaded closure documents.`
-    }, closer._id);
+
+    // Notifications are secondary to the closure transaction. Do not report
+    // a failed closure after the case has already been saved successfully.
+    try {
+      await notifyCaseTeam(caseItem, {
+        actorId: closer._id,
+        actorName: closer.name,
+        kind: 'CASE_CLOSED',
+        title: 'Case closed',
+        body: `${closer.name} closed ${caseItem.caseId} and uploaded closure documents.`
+      }, closer._id);
+    } catch (notificationError) {
+      logger.error('Case closed, but team notification failed:', notificationError.stack || notificationError.message);
+    }
+
     res.json({ success: true, closureDocs: caseItem.closureDocs });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to close case' });
+    logger.error('Failed to close case:', err.stack || err.message);
+    res.status(500).json({ error: 'Failed to close case', details: err.message });
   }
 });
 
