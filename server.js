@@ -167,6 +167,9 @@ app.use('/api/users', require('./routes/users'));
 // Messaging
 app.use('/api/messages', require('./routes/messages'));
 
+// User feedback
+app.use('/api/feedback', require('./routes/feedback'));
+
 // Notifications
 app.use('/api/notifications', require('./routes/notifications'));
 
