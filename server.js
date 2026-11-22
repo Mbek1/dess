@@ -33,7 +33,7 @@ const PORT = process.env.PORT || 3001;
 // ======================================================
 
 // Production frontend:
-// https://dess-frontend.onrender.com
+// https://dess-icu.netlify.app
 //
 // Local frontend:
 // http://localhost:5173
@@ -42,7 +42,7 @@ const PORT = process.env.PORT || 3001;
 
 const defaultFrontendOrigin =
     process.env.NODE_ENV === 'production'
-        ? 'https://dess-frontend.onrender.com'
+        ? 'https://dess-icu.netlify.app'
         : 'http://localhost:5173';
 
 const configuredOrigins = (
