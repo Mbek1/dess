@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Case = require('../models/Case');
 const AuditLog = require('../models/AuditLog');
+const UserSession = require('../models/UserSession');
 const Policy = require('../models/Policy');
 const SystemSettings = require('../models/SystemSettings');
 const logger = require('../utils/logger');
@@ -260,6 +261,163 @@ function getDefaultPolicy(type) {
   };
   return defaults[type] || {};
 }
+
+
+// ============================================
+// SECURITY ACCESS REVIEWS
+// ============================================
+
+// Account access review: role, account status, MFA state and session activity.
+router.get('/security/access-review', async (req, res) => {
+  try {
+    const users = await User.find()
+      .select('_id name email role active emailVerified mfaEnabled createdAt updatedAt')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const sessionStats = await UserSession.aggregate([
+      {
+        $group: {
+          _id: '$userId',
+          lastLoginAt: { $max: '$createdAt' },
+          activeSessionCount: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ['$revokedAt', null] }, { $gt: ['$expiresAt', new Date()] }] },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+    const statsByUser = new Map(sessionStats.map(item => [String(item._id), item]));
+
+    res.json({
+      reviewedAt: new Date(),
+      users: users.map(user => {
+        const stats = statsByUser.get(String(user._id)) || {};
+        return {
+          ...user,
+          active: user.active !== false,
+          mfaEnabled: user.mfaEnabled === true,
+          lastLoginAt: stats.lastLoginAt || null,
+          activeSessionCount: stats.activeSessionCount || 0
+        };
+      })
+    });
+  } catch (err) {
+    logger.error('Access review failed:', err.message);
+    res.status(500).json({ error: 'Unable to load account access review.' });
+  }
+});
+
+// Current active sessions across the system for administrator oversight.
+router.get('/security/sessions', async (req, res) => {
+  try {
+    const sessions = await UserSession.find({
+      revokedAt: null,
+      expiresAt: { $gt: new Date() }
+    })
+      .populate('userId', 'name email role active')
+      .sort({ lastActivityAt: -1 })
+      .limit(500)
+      .select('-refreshTokenHash')
+      .lean();
+
+    res.json({
+      sessions: sessions
+        .filter(session => session.userId && session.userId.active !== false)
+        .map(session => ({
+          id: session._id,
+          user: {
+            id: session.userId._id,
+            name: session.userId.name,
+            email: session.userId.email,
+            role: session.userId.role
+          },
+          deviceLabel: session.deviceLabel,
+          ipAddress: session.ipAddress,
+          userAgent: session.userAgent,
+          createdAt: session.createdAt,
+          lastActivityAt: session.lastActivityAt,
+          expiresAt: session.expiresAt
+        }))
+    });
+  } catch (err) {
+    logger.error('Active session review failed:', err.message);
+    res.status(500).json({ error: 'Unable to load active sessions.' });
+  }
+});
+
+// Administrators may revoke a session after reviewing suspicious or stale access.
+router.delete('/security/sessions/:sessionId', async (req, res) => {
+  try {
+    const session = await UserSession.findOne({
+      _id: req.params.sessionId,
+      revokedAt: null
+    });
+    if (!session) return res.status(404).json({ error: 'Active session not found.' });
+
+    session.revokedAt = new Date();
+    session.revokedReason = 'Revoked by administrator';
+    await session.save();
+
+    await logAuditEvent(req.user._id, 'REVOKE_SESSION', 'Administrator revoked a user session', {
+      sessionId: String(session._id),
+      affectedUserId: String(session.userId)
+    });
+    res.json({ message: 'Session revoked successfully.' });
+  } catch (err) {
+    logger.error('Administrator session revocation failed:', err.message);
+    res.status(500).json({ error: 'Unable to revoke session.' });
+  }
+});
+
+// Account status and role changes require an explicit administrator decision.
+// Any change invalidates existing sessions so the next request re-authenticates.
+router.patch('/security/users/:userId/access', async (req, res) => {
+  try {
+    const { active, role } = req.body;
+    if (active === undefined && role === undefined) {
+      return res.status(400).json({ error: 'Provide an account status or role change.' });
+    }
+    if (active !== undefined && typeof active !== 'boolean') {
+      return res.status(400).json({ error: 'Account status must be true or false.' });
+    }
+    if (role !== undefined && !['investigator', 'researcher', 'admin'].includes(role)) {
+      return res.status(400).json({ error: 'Invalid account role.' });
+    }
+    if (String(req.params.userId) === String(req.user._id) && (active === false || role !== undefined && role !== 'admin')) {
+      return res.status(400).json({ error: 'You cannot remove your own administrator access.' });
+    }
+
+    const user = await User.findById(req.params.userId);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    if (active !== undefined) user.active = active;
+    if (role !== undefined) user.role = role;
+    await user.save();
+
+    await UserSession.updateMany(
+      { userId: user._id, revokedAt: null },
+      { $set: { revokedAt: new Date(), revokedReason: 'Account access changed by administrator' } }
+    );
+    await logAuditEvent(req.user._id, 'ACCESS_REVIEW', 'Administrator updated account access', {
+      affectedUserId: String(user._id),
+      active: user.active !== false,
+      role: user.role
+    });
+
+    res.json({
+      message: 'Account access updated. Existing sessions have been revoked.',
+      user: { id: user._id, name: user.name, email: user.email, role: user.role, active: user.active !== false }
+    });
+  } catch (err) {
+    logger.error('Account access update failed:', err.message);
+    res.status(500).json({ error: 'Unable to update account access.' });
+  }
+});
 
 // ============================================
 // CASE & EVIDENCE OVERSIGHT
