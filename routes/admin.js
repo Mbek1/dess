@@ -63,7 +63,6 @@ router.get('/stats', async (req, res) => {
 // Get all users
 router.get('/users', async (req, res) => {
   try {
-    const idleCutoff = new Date(Date.now() - Number(process.env.SESSION_IDLE_TIMEOUT_MINUTES || 30) * 60 * 1000);
     const users = await User.find().select('-password');
     res.json(users);
   } catch (err) {
@@ -271,6 +270,7 @@ function getDefaultPolicy(type) {
 // Account access review: role, account status, MFA state and session activity.
 router.get('/security/access-review', async (req, res) => {
   try {
+    const idleCutoff = new Date(Date.now() - Number(process.env.SESSION_IDLE_TIMEOUT_MINUTES || 30) * 60 * 1000);
     const users = await User.find()
       .select('_id name email role active emailVerified mfaEnabled createdAt updatedAt')
       .sort({ createdAt: -1 })
