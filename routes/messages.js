@@ -57,6 +57,38 @@ async function getAuthorizedInvestigatorCase(caseId, user) {
   return caseItem;
 }
 
+// Attach the current profile-photo URLs at read time. This means a photo change
+// is reflected in existing conversations without rewriting old message records.
+async function attachDirectMessageProfilePictures(records) {
+  const rows = records.map(record => record?.toObject ? record.toObject() : record);
+  const userIds = [...new Set(rows.flatMap(row => [row.senderId, row.recipientId])
+    .filter(Boolean).map(id => id.toString()))];
+  if (!userIds.length) return rows;
+
+  const users = await User.find({ _id: { $in: userIds } }).select('_id profilePicture').lean();
+  const photosByUserId = new Map(users.map(user => [user._id.toString(), user.profilePicture || '']));
+
+  return rows.map(row => ({
+    ...row,
+    senderProfilePicture: photosByUserId.get(row.senderId?.toString()) || '',
+    recipientProfilePicture: photosByUserId.get(row.recipientId?.toString()) || ''
+  }));
+}
+
+async function attachCaseChatMessageProfilePictures(records) {
+  const rows = records.map(record => record?.toObject ? record.toObject() : record);
+  const senderIds = [...new Set(rows.map(row => row.senderId?.toString()).filter(Boolean))];
+  if (!senderIds.length) return rows;
+
+  const users = await User.find({ _id: { $in: senderIds } }).select('_id profilePicture').lean();
+  const photosByUserId = new Map(users.map(user => [user._id.toString(), user.profilePicture || '']));
+
+  return rows.map(row => ({
+    ...row,
+    senderProfilePicture: photosByUserId.get(row.senderId?.toString()) || ''
+  }));
+}
+
 // GET /api/messages/case-chats - list case rooms for the investigator's assigned cases
 router.get('/case-chats', async (req, res) => {
   try {
@@ -95,7 +127,7 @@ router.get('/case-chats/:caseId/messages', async (req, res) => {
     };
     await CaseChatMessage.updateMany(unreadFilter, { $push: { readBy: { userId, readAt: new Date() } } });
     const messages = await CaseChatMessage.find({ caseChatId: chat._id }).sort({ createdAt: 1 }).lean();
-    res.json({ chat, messages });
+    res.json({ chat, messages: await attachCaseChatMessageProfilePictures(messages) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load case conversation' });
   }
@@ -111,7 +143,7 @@ router.post('/case-chats/:caseId/messages', async (req, res) => {
     if (!content) return res.status(400).json({ error: 'Message content is required' });
     if (content.length > 10000) return res.status(400).json({ error: 'Message must be 10,000 characters or fewer' });
 
-    const sender = await User.findById(req.user.id).select('name role');
+    const sender = await User.findById(req.user.id).select('name role profilePicture');
     if (!sender || sender.role !== 'investigator') return res.status(403).json({ error: 'Investigator access required' });
     const chat = await syncCaseChatParticipants(caseItem, sender._id);
     const message = await CaseChatMessage.create({
@@ -120,6 +152,7 @@ router.post('/case-chats/:caseId/messages', async (req, res) => {
       senderId: sender._id,
       senderName: sender.name,
       senderRole: sender.role,
+      senderProfilePicture: sender.profilePicture || '',
       content
     });
     chat.lastMessage = content;
@@ -132,7 +165,10 @@ router.post('/case-chats/:caseId/messages', async (req, res) => {
       title: 'New case-room message',
       body: `${sender.name} posted in ${caseItem.caseId}.`
     }, sender._id);
-    res.status(201).json(message);
+    res.status(201).json({
+      ...message.toObject(),
+      senderProfilePicture: sender.profilePicture || ''
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to send case-room message' });
   }
@@ -154,7 +190,7 @@ router.get('/', async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(100);
 
-    res.json(messages);
+    res.json(await attachDirectMessageProfilePictures(messages));
   } catch (err) {
     console.error('Error fetching messages:', err);
     res.status(500).json({ error: 'Failed to fetch messages' });
@@ -229,7 +265,7 @@ router.get('/conversation/:userId', async (req, res) => {
       }
     );
 
-    res.json(messages);
+    res.json(await attachDirectMessageProfilePictures(messages));
   } catch (err) {
     console.error('Error fetching conversation:', err);
     res.status(500).json({ error: 'Failed to fetch conversation' });
@@ -258,7 +294,8 @@ router.get('/:id', async (req, res) => {
       await message.save();
     }
 
-    res.json(message);
+    const [messageWithPhotos] = await attachDirectMessageProfilePictures([message]);
+    res.json(messageWithPhotos);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch message' });
   }
@@ -368,7 +405,11 @@ router.post('/', async (req, res) => {
     });
 
     await message.save();
-    res.status(201).json(message);
+    res.status(201).json({
+      ...message.toObject(),
+      senderProfilePicture: sender.profilePicture || '',
+      recipientProfilePicture: recipient.profilePicture || ''
+    });
   } catch (err) {
     console.error('Error sending message:', err);
     res.status(500).json({ error: 'Failed to send message' });
