@@ -284,7 +284,14 @@ router.post('/', authenticateToken, async (req, res) => {
         email: creator.email,
         role: creator.role
       },
-      team: teamArray 
+      team: teamArray,
+      auditLog: [{
+        action: 'CASE_CREATED',
+        type: 'case_event',
+        description: `Case ${caseId} created`,
+        performedBy: { userId: creator._id, name: creator.name, email: creator.email },
+        details: { caseType, initialStatus: status || 'open', teamMemberCount: teamArray.length }
+      }]
     });
     await newCase.save();
     const caseChat = await syncCaseChatParticipants(newCase, creator._id);
@@ -328,10 +335,18 @@ router.patch('/:id', requireInvestigatorCaseAccess, async (req, res) => {
     if (caseItem.status === 'open' && updates.status === 'closed') {
       return res.status(400).json({ error: 'Upload closure documents using the close endpoint' });
     }
-    // Allow other updates if not status change
+    // Record a concise audit entry before persisting the updated case.
+    const actor = await User.findById(req.user.id).select('name email');
+    const changedFields = Object.keys(updates).filter(field => !['auditLog', 'createdBy', '_id', '__v'].includes(field));
     Object.assign(caseItem, updates);
+    caseItem.auditLog.push({
+      action: 'CASE_UPDATE',
+      type: 'case_event',
+      description: `Case details updated: ${changedFields.join(', ') || 'case information'}`,
+      performedBy: { userId: actor._id, name: actor.name, email: actor.email },
+      details: { updatedFields: changedFields }
+    });
     await caseItem.save();
-    const actor = await User.findById(req.user.id).select('name');
     await notifyCaseTeam(caseItem, {
       actorId: req.user.id,
       actorName: actor?.name,
