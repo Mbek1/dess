@@ -38,7 +38,7 @@ function setAuthCookies(res, accessToken, refreshToken, maxAge) {
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
   };
   res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge, path: '/api/auth' });
-  res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000, path: '/' });
+  res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 2 * 60 * 60 * 1000, path: '/' });
 }
 
 function clearAuthCookies(res) {
@@ -54,7 +54,7 @@ function clearAuthCookies(res) {
 function createTokens(user, sessionId) {
   const claims = { id: user._id.toString(), role: user.role, sid: sessionId.toString() };
   return {
-    accessToken: jwt.sign(claims, JWT_SECRET, { expiresIn: '15m' }),
+    accessToken: jwt.sign(claims, JWT_SECRET, { expiresIn: '2h' }),
     refreshToken: jwt.sign(claims, JWT_REFRESH_SECRET, { expiresIn: `${SESSION_MAX_HOURS}h` })
   };
 }
