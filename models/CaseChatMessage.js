@@ -6,6 +6,7 @@ const CaseChatMessageSchema = new mongoose.Schema({
   senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   senderName: { type: String, required: true },
   senderRole: { type: String, enum: ['investigator', 'admin'], required: true },
+  senderProfilePicture: { type: String, default: '' },
   content: { type: String, required: true, trim: true, maxlength: 10000 },
   readBy: [{
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
