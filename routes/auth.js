@@ -220,6 +220,8 @@ router.get('/sessions', authenticateToken, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(50)
       .select('-refreshTokenHash');
+    const now = new Date();
+    const idleCutoff = new Date(now.getTime() - IDLE_TIMEOUT_MINUTES * 60 * 1000);
     return res.json({
       sessions: sessions.map(session => ({
         id: session._id,
@@ -232,7 +234,7 @@ router.get('/sessions', authenticateToken, async (req, res) => {
         revokedAt: session.revokedAt,
         revokedReason: session.revokedReason,
         isCurrent: String(session._id) === String(req.user.sid),
-        isActive: !session.revokedAt && session.expiresAt > new Date()
+        isActive: !session.revokedAt && session.expiresAt > now && session.lastActivityAt > idleCutoff
       }))
     });
   } catch (err) {
