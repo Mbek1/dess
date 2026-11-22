@@ -150,7 +150,7 @@ router.post('/case-chats/:caseId/messages', async (req, res) => {
     if (!content) return res.status(400).json({ error: 'Message content is required' });
     if (content.length > 10000) return res.status(400).json({ error: 'Message must be 10,000 characters or fewer' });
 
-    const sender = await User.findById(req.user.id).select('name role profilePicture');
+    const sender = await User.findById(req.user.id).select('name email role profilePicture');
     if (!sender || sender.role !== 'investigator') return res.status(403).json({ error: 'Investigator access required' });
     const chat = await syncCaseChatParticipants(caseItem, sender._id);
     const message = await CaseChatMessage.create({
