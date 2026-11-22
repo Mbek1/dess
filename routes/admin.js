@@ -318,6 +318,7 @@ router.get('/security/access-review', async (req, res) => {
 // Current active sessions across the system for administrator oversight.
 router.get('/security/sessions', async (req, res) => {
   try {
+    const idleCutoff = new Date(Date.now() - Number(process.env.SESSION_IDLE_TIMEOUT_MINUTES || 30) * 60 * 1000);
     const sessions = await UserSession.find({
       revokedAt: null,
       expiresAt: { $gt: new Date() },
