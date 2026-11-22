@@ -12,17 +12,28 @@ const logger = require('../utils/logger');
 const sharp = require('sharp');
 const { authenticateToken } = require('../middleware/auth');
 
-// Multer setup for avatar uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, path.join(__dirname, '..', 'uploads', 'avatars'));
-  },
-  filename: function (req, file, cb) {
-    const ext = path.extname(file.originalname);
-    cb(null, `${req.params.id}-${Date.now()}${ext}`);
+// Avatar uploads are kept in MongoDB so they survive Render restarts and deploys.
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif'];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error('Upload a JPEG, PNG, WEBP, GIF or AVIF image'));
+    }
+    return cb(null, true);
   }
 });
-const upload = multer({ storage: storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB
+
+function handleAvatarUpload(req, res, next) {
+  avatarUpload.single('avatar')(req, res, err => {
+    if (!err) return next();
+    const isTooLarge = err.code === 'LIMIT_FILE_SIZE';
+    return res.status(isTooLarge ? 413 : 400).json({
+      error: isTooLarge ? 'Profile pictures must be 5 MB or smaller' : err.message || 'Invalid profile picture upload'
+    });
+  });
+}
 
 const verificationUploadDir = path.join(__dirname, '..', 'private_uploads', 'verification');
 fs.mkdirSync(verificationUploadDir, { recursive: true });
@@ -62,12 +73,32 @@ function publicDocumentDetails(document) {
 }
 
 // POST /api/users/:id/avatar - upload profile avatar
-router.post('/:id/avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
+// GET /api/users/:id/avatar - return a stored profile picture.
+router.get('/:id/avatar', async (req, res) => {
   try {
-    // Ensure authenticated
-    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ error: 'Invalid user ID' });
+    }
 
-    // Only allow uploading to own profile unless admin
+    const user = await User.findById(req.params.id).select('+avatarData +avatarContentType');
+    if (!user || !user.avatarData || user.avatarData.length === 0) {
+      return res.status(404).json({ error: 'Profile picture not found' });
+    }
+
+    res.setHeader('Content-Type', user.avatarContentType || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(user.avatarData);
+  } catch (err) {
+    logger.error('Error retrieving avatar:', err.message);
+    return res.status(500).json({ error: 'Failed to retrieve profile picture' });
+  }
+});
+
+// POST /api/users/:id/avatar - upload profile avatar.
+router.post('/:id/avatar', authenticateToken, handleAvatarUpload, async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
     if (req.user.id !== req.params.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Not authorized to upload avatar for this user' });
     }
@@ -76,36 +107,28 @@ router.post('/:id/avatar', authenticateToken, upload.single('avatar'), async (re
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    // Validate file is an image
-    if (!req.file.mimetype || !req.file.mimetype.startsWith('image/')) {
-      // remove uploaded file
-      try { require('fs').unlinkSync(req.file.path); } catch (e) {}
-      return res.status(400).json({ error: 'Uploaded file must be an image' });
-    }
-
-    // Resize and convert to JPG for consistency
-    const outFilename = `${req.params.id}-${Date.now()}.jpg`;
-    const outPath = path.join(__dirname, '..', 'uploads', 'avatars', outFilename);
+    let optimizedAvatar;
     try {
-      await sharp(req.file.path)
-        .resize(300, 300, { fit: 'cover' })
-        .jpeg({ quality: 80 })
-        .toFile(outPath);
-      // remove original uploaded file
-      try { require('fs').unlinkSync(req.file.path); } catch (e) {}
+      optimizedAvatar = await sharp(req.file.buffer)
+        .rotate()
+        .resize(300, 300, { fit: 'cover', withoutEnlargement: true })
+        .jpeg({ quality: 82 })
+        .toBuffer();
     } catch (procErr) {
-      logger.error('Image processing failed:', procErr.message);
-      try { require('fs').unlinkSync(req.file.path); } catch (e) {}
-      return res.status(500).json({ error: 'Failed to process image' });
+      logger.warn('Avatar image processing failed:', procErr.message);
+      return res.status(400).json({ error: 'The selected file could not be processed as an image' });
     }
 
-    const avatarUrl = `/uploads/avatars/${outFilename}`;
-    user.profilePicture = avatarUrl;
+    user.avatarData = optimizedAvatar;
+    user.avatarContentType = 'image/jpeg';
+    user.avatarUpdatedAt = new Date();
+    user.profilePicture = `/api/users/${user._id}/avatar?v=${user.avatarUpdatedAt.getTime()}`;
     await user.save();
-    res.json({ profilePicture: avatarUrl });
+
+    return res.json({ profilePicture: user.profilePicture });
   } catch (err) {
     logger.error('Error uploading avatar:', err.message);
-    res.status(500).json({ error: 'Failed to upload avatar' });
+    return res.status(500).json({ error: 'Failed to upload avatar' });
   }
 });
 

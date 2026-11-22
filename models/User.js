@@ -19,6 +19,9 @@ const UserSchema = new mongoose.Schema({
   organizationRole: { type: String, default: '' },
   organizationIdNumber: { type: String, default: '' },
   profilePicture: { type: String, default: '' },
+  avatarData: { type: Buffer, select: false },
+  avatarContentType: { type: String, select: false },
+  avatarUpdatedAt: { type: Date, select: false },
   emailVerified: { type: Boolean, default: false },
   verificationDocuments: {
     identity: { type: VerificationDocumentSchema, default: null },
