@@ -242,9 +242,15 @@ test('case access, search, messaging, and evidence integrity', async t => {
       assert.equal(caseChat.participants.length, 3);
       assert.ok(caseChat.participants.some(member => member.userId.equals(teamVoter._id)));
 
+      // The room list should repair a missing room using the case's current team.
+      await CaseChat.deleteOne({ caseId: created._id });
       const roomList = await request('/api/messages/case-chats', { token: investigatorToken });
       assert.equal(roomList.status, 200);
-      assert.ok((await roomList.json()).some(room => room.caseId === created._id));
+      const listedRooms = await roomList.json();
+      const repairedRoom = listedRooms.find(room => room.caseId === created._id);
+      assert.ok(repairedRoom);
+      assert.equal(repairedRoom.participants.length, 3);
+      assert.ok(await CaseChat.exists({ caseId: created._id }));
       const researcherRoomList = await request('/api/messages/case-chats', { token: researcherToken });
       assert.equal(researcherRoomList.status, 403);
 
