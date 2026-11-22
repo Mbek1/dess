@@ -140,10 +140,17 @@ router.post('/case-chats/:caseId/messages', async (req, res) => {
     const caseItem = await getAuthorizedInvestigatorCase(req.params.caseId, req.user);
     if (!caseItem) return res.status(403).json({ error: 'You are not assigned to this case' });
     const content = typeof req.body.content === 'string' ? req.body.content.trim() : '';
+    let replyTo = null;
+    if (req.body.replyToMessageId) {
+      if (!mongoose.isValidObjectId(req.body.replyToMessageId)) return res.status(400).json({ error: 'Invalid reply target' });
+      const parentMessage = await CaseChatMessage.findOne({ _id: req.body.replyToMessageId, caseId: caseItem._id });
+      if (!parentMessage) return res.status(404).json({ error: 'Reply target not found in this case room' });
+      replyTo = { messageId: parentMessage._id, senderName: parentMessage.senderName, content: parentMessage.content.slice(0, 240) };
+    }
     if (!content) return res.status(400).json({ error: 'Message content is required' });
     if (content.length > 10000) return res.status(400).json({ error: 'Message must be 10,000 characters or fewer' });
 
-    const sender = await User.findById(req.user.id).select('name role profilePicture');
+    const sender = await User.findById(req.user.id).select('name email role profilePicture');
     if (!sender || sender.role !== 'investigator') return res.status(403).json({ error: 'Investigator access required' });
     const chat = await syncCaseChatParticipants(caseItem, sender._id);
     const message = await CaseChatMessage.create({
@@ -153,11 +160,20 @@ router.post('/case-chats/:caseId/messages', async (req, res) => {
       senderName: sender.name,
       senderRole: sender.role,
       senderProfilePicture: sender.profilePicture || '',
-      content
+      content,
+      ...(replyTo ? { replyTo } : {})
     });
     chat.lastMessage = content;
     chat.lastMessageAt = message.createdAt;
     await chat.save();
+    caseItem.auditLog.push({
+      action: 'CASE_CHAT_MESSAGE',
+      type: 'collaboration',
+      description: `${sender.name} posted a message in the case room`,
+      performedBy: { userId: sender._id, name: sender.name, email: sender.email || '' },
+      details: { messageId: message._id, preview: content.slice(0, 160), replyToMessageId: replyTo?.messageId || null }
+    });
+    await caseItem.save();
     await notifyCaseTeam(caseItem, {
       actorId: sender._id,
       actorName: sender.name,
@@ -171,6 +187,34 @@ router.post('/case-chats/:caseId/messages', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to send case-room message' });
+  }
+});
+
+// PATCH /api/messages/case-chats/:caseId/messages/:messageId/pin - pin or unpin a case-room message
+router.patch('/case-chats/:caseId/messages/:messageId/pin', async (req, res) => {
+  try {
+    const caseItem = await getAuthorizedInvestigatorCase(req.params.caseId, req.user);
+    if (!caseItem) return res.status(403).json({ error: 'You are not assigned to this case' });
+    const chat = await syncCaseChatParticipants(caseItem, req.user.id);
+    const message = await CaseChatMessage.findOne({ _id: req.params.messageId, caseChatId: chat._id, caseId: caseItem._id });
+    if (!message) return res.status(404).json({ error: 'Case-room message not found' });
+    const shouldPin = req.body.isPinned === true;
+    const actor = await User.findById(req.user.id).select('name email');
+    message.isPinned = shouldPin;
+    message.pinnedBy = shouldPin ? actor._id : null;
+    message.pinnedAt = shouldPin ? new Date() : null;
+    await message.save();
+    caseItem.auditLog.push({
+      action: shouldPin ? 'CASE_CHAT_MESSAGE_PINNED' : 'CASE_CHAT_MESSAGE_UNPINNED',
+      type: 'collaboration',
+      description: `${actor.name} ${shouldPin ? 'pinned' : 'unpinned'} a case-room message`,
+      performedBy: { userId: actor._id, name: actor.name, email: actor.email || '' },
+      details: { messageId: message._id, preview: message.content.slice(0, 160) }
+    });
+    await caseItem.save();
+    res.json(message);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update pinned message' });
   }
 });
 
