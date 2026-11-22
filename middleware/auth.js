@@ -56,7 +56,7 @@ async function authenticateToken(req, res, next) {
       }
     }
 
-    req.user = { id: user._id.toString(), role: user.role, sid: decoded.sid || null };
+    req.user = { id: user._id.toString(), _id: user._id, role: user.role, sid: decoded.sid || null };
     return next();
   } catch (err) {
     if (err.name === 'TokenExpiredError' || err.name === 'JsonWebTokenError') {
