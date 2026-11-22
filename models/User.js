@@ -12,9 +12,10 @@ const VerificationDocumentSchema = new mongoose.Schema({
 
 const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
   password: { type: String, required: true },
   role: { type: String, enum: ['researcher', 'investigator', 'admin'], required: true },
+  active: { type: Boolean, default: true },
   organizationName: { type: String, default: '' },
   organizationRole: { type: String, default: '' },
   organizationIdNumber: { type: String, default: '' },
@@ -27,7 +28,12 @@ const UserSchema = new mongoose.Schema({
     identity: { type: VerificationDocumentSchema, default: null },
     organization: { type: VerificationDocumentSchema, default: null }
   },
-  refreshToken: { type: String, default: '' },
+  // Kept temporarily for compatibility with older deployments. New sessions
+  // store refresh-token hashes independently in UserSession documents.
+  refreshToken: { type: String, default: '', select: false },
+  mfaEnabled: { type: Boolean, default: false },
+  mfaSecret: { type: String, select: false },
+  mfaRecoveryCodes: { type: [String], select: false, default: [] }
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', UserSchema);
