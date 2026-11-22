@@ -3,12 +3,14 @@ const User = require('../models/User');
 
 async function syncCaseChatParticipants(caseItem, createdById) {
   const teamIds = [...new Set(caseItem.team.map(member => member.id?.toString()).filter(Boolean))];
-  const investigators = await User.find({ _id: { $in: teamIds }, role: 'investigator' }).select('name email role');
+  const investigators = await User.find({ _id: { $in: teamIds }, role: 'investigator' })
+    .select('name email role profilePicture');
   const participants = investigators.map(user => ({
     userId: user._id,
     name: user.name,
     email: user.email,
-    role: user.role
+    role: user.role,
+    profilePicture: user.profilePicture || ''
   }));
 
   return CaseChat.findOneAndUpdate(

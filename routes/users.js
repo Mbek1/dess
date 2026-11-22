@@ -149,7 +149,7 @@ router.get('/', authenticateToken, async (req, res) => {
       ];
     }
 
-    const users = await User.find(query, 'name email role organizationName organizationRole _id').limit(20);
+    const users = await User.find(query, 'name email role organizationName organizationRole profilePicture _id').limit(20);
     res.json(users);
   } catch (err) {
     logger.error('Error fetching users:', err.message);

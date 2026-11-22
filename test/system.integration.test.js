@@ -35,6 +35,7 @@ test('case access, search, messaging, and evidence integrity', async t => {
   const messageContent = `integration message ${runId}`;
   const testUserIds = [];
   const testCaseIds = [];
+  const createdGroupCaseIds = [];
   const uploadedFiles = [];
   let server;
 
@@ -215,6 +216,7 @@ test('case access, search, messaging, and evidence integrity', async t => {
       assert.equal(createdResponse.status, 201);
       const created = await createdResponse.json();
       testCaseIds.push(created._id);
+      createdGroupCaseIds.push(created._id);
       assert.equal(created.createdBy.id, investigator.id);
       assert.ok(created.team.some(member => member.id === investigator.id));
       assert.ok(created.team.some(member => member.id === otherInvestigator.id));
@@ -681,12 +683,11 @@ test('case access, search, messaging, and evidence integrity', async t => {
       });
       assert.equal(uploadResponse.status, 200);
       const upload = await uploadResponse.json();
-      assert.match(upload.profilePicture, /^\/uploads\/avatars\/.+\.jpg$/);
+      assert.match(upload.profilePicture, /^\/api\/users\/[a-f0-9]{24}\/avatar\?v=\d+$/);
 
-      const savedUser = await User.findById(investigator.id);
+      const savedUser = await User.findById(investigator.id).select('+avatarData');
       assert.equal(savedUser.profilePicture, upload.profilePicture);
-      const avatarPath = path.join(__dirname, '..', 'uploads', upload.profilePicture.replace(/^\/uploads\//, ''));
-      uploadedFiles.push(avatarPath);
+      assert.ok(savedUser.avatarData?.length);
 
       const imageResponse = await fetch(`${baseUrl}${upload.profilePicture}`);
       assert.equal(imageResponse.status, 200);
@@ -695,6 +696,40 @@ test('case access, search, messaging, and evidence integrity', async t => {
       const metadata = await sharp(processedImage).metadata();
       assert.equal(metadata.width, 300);
       assert.equal(metadata.height, 300);
+
+      const directoryResponse = await request(`/api/users?userId=${investigator.id}`, { token: investigatorToken });
+      assert.equal(directoryResponse.status, 200);
+      const directoryUser = (await directoryResponse.json())[0];
+      assert.equal(directoryUser.profilePicture, upload.profilePicture);
+
+      const roomsResponse = await request('/api/messages/case-chats', { token: investigatorToken });
+      assert.equal(roomsResponse.status, 200);
+      const rooms = await roomsResponse.json();
+      const caseRoom = rooms.find(room => room.caseId === createdGroupCaseIds[0]);
+      assert.ok(caseRoom);
+      const roomParticipant = caseRoom.participants.find(participant => participant.userId === investigator.id);
+      assert.equal(roomParticipant.profilePicture, upload.profilePicture);
+
+      const groupPost = await request(`/api/messages/case-chats/${createdGroupCaseIds[0]}/messages`, {
+        token: investigatorToken,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: `Photo-aware room message ${runId}` })
+      });
+      assert.equal(groupPost.status, 201);
+      assert.equal((await groupPost.json()).senderProfilePicture, upload.profilePicture);
+
+      const groupHistoryResponse = await request(`/api/messages/case-chats/${createdGroupCaseIds[0]}/messages`, { token: investigatorToken });
+      assert.equal(groupHistoryResponse.status, 200);
+      const groupHistory = await groupHistoryResponse.json();
+      const groupMessage = groupHistory.messages.find(message => message.content === `Photo-aware room message ${runId}`);
+      assert.equal(groupMessage.senderProfilePicture, upload.profilePicture);
+
+      const directSentResponse = await request('/api/messages?view=sent', { token: investigatorToken });
+      assert.equal(directSentResponse.status, 200);
+      const directSent = await directSentResponse.json();
+      const directMessage = directSent.find(message => message.content === messageContent);
+      assert.equal(directMessage.senderProfilePicture, upload.profilePicture);
     });
 
     await t.test('server hash persists, matches unchanged bytes, detects modification, and audits checks', async () => {
