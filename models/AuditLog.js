@@ -35,7 +35,9 @@ const auditLogSchema = new mongoose.Schema({
       'TEST_BACKUP',
       'PURGE_LOGS',
       'ACCESS_DENIED',
-      'SUSPICIOUS_ACTIVITY'
+      'SUSPICIOUS_ACTIVITY',
+      'REVOKE_SESSION',
+      'ACCESS_REVIEW'
     ]
   },
   description: String,
