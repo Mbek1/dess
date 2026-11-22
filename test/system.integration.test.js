@@ -220,6 +220,9 @@ test('case access, search, messaging, and evidence integrity', async t => {
       assert.equal(created.createdBy.id, investigator.id);
       assert.ok(created.team.some(member => member.id === investigator.id));
       assert.ok(created.team.some(member => member.id === otherInvestigator.id));
+      assert.ok(created.caseChat?._id);
+      assert.equal(created.caseChat.caseId, created._id);
+      assert.equal(created.caseChat.participants.length, 2);
 
       let caseChat = await CaseChat.findOne({ caseId: created._id });
       assert.ok(caseChat);
