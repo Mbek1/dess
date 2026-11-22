@@ -20,8 +20,7 @@ function hashToken(token) {
 }
 
 function getRequestMetadata(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  const ipAddress = (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0]) || req.ip || '';
+  const ipAddress = req.ip || '';
   const userAgent = req.get('user-agent') || '';
   let deviceLabel = 'Unknown device';
   if (/windows/i.test(userAgent)) deviceLabel = 'Windows device';
