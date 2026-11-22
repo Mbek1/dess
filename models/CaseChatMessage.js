@@ -8,6 +8,14 @@ const CaseChatMessageSchema = new mongoose.Schema({
   senderRole: { type: String, enum: ['investigator', 'admin'], required: true },
   senderProfilePicture: { type: String, default: '' },
   content: { type: String, required: true, trim: true, maxlength: 10000 },
+  replyTo: {
+    messageId: { type: mongoose.Schema.Types.ObjectId, ref: 'CaseChatMessage' },
+    senderName: { type: String },
+    content: { type: String, maxlength: 240 }
+  },
+  isPinned: { type: Boolean, default: false, index: true },
+  pinnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  pinnedAt: { type: Date },
   readBy: [{
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     readAt: { type: Date, default: Date.now }
