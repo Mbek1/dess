@@ -63,6 +63,7 @@ router.get('/stats', async (req, res) => {
 // Get all users
 router.get('/users', async (req, res) => {
   try {
+    const idleCutoff = new Date(Date.now() - Number(process.env.SESSION_IDLE_TIMEOUT_MINUTES || 30) * 60 * 1000);
     const users = await User.find().select('-password');
     res.json(users);
   } catch (err) {
@@ -283,7 +284,8 @@ router.get('/security/access-review', async (req, res) => {
           activeSessionCount: {
             $sum: {
               $cond: [
-                { $and: [{ $eq: ['$revokedAt', null] }, { $gt: ['$expiresAt', new Date()] }] },
+                { $and: [{ $eq: ['$revokedAt', null] }, { $gt: ['$expiresAt', new Date()] },
+                { $gt: ['$lastActivityAt', idleCutoff] }] },
                 1,
                 0
               ]
@@ -318,7 +320,8 @@ router.get('/security/sessions', async (req, res) => {
   try {
     const sessions = await UserSession.find({
       revokedAt: null,
-      expiresAt: { $gt: new Date() }
+      expiresAt: { $gt: new Date() },
+      lastActivityAt: { $gt: idleCutoff }
     })
       .populate('userId', 'name email role active')
       .sort({ lastActivityAt: -1 })
