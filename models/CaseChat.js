@@ -9,6 +9,7 @@ const CaseChatSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true },
     role: { type: String, enum: ['investigator', 'admin'], required: true },
+    profilePicture: { type: String, default: '' },
     joinedAt: { type: Date, default: Date.now }
   }],
   lastMessage: { type: String, default: '' },
