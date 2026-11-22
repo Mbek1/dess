@@ -19,7 +19,7 @@ router.post('/signup', async (req, res) => {
       return res.status(400).json({ error: 'All fields are required.' });
     }
     if (!['investigator', 'researcher'].includes(role)) {
-      return res.status(400).json({ error: 'Public registration is limited to investigator and researcher accounts.' });
+      return res.status(400).json({ error: 'Public registration is limited to DESS accounts.' });
     }
     const existing = await User.findOne({ email });
     if (existing) {
