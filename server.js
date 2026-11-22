@@ -20,6 +20,10 @@ const {
 
 const app = express();
 
+// Render sits behind a reverse proxy; use the forwarded client address for
+// audit/session metadata while retaining Express's trusted-proxy handling.
+app.set('trust proxy', 1);
+
 // Render automatically supplies PORT (default: 10000).
 // Locally, the application defaults to port 3001.
 const PORT = process.env.PORT || 3001;
