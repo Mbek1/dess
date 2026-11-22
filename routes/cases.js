@@ -287,7 +287,10 @@ router.post('/', authenticateToken, async (req, res) => {
       team: teamArray 
     });
     await newCase.save();
-    await syncCaseChatParticipants(newCase, creator._id);
+    const caseChat = await syncCaseChatParticipants(newCase, creator._id);
+    if (!caseChat) {
+      throw new Error('The case was saved but its group conversation could not be created');
+    }
     await notifyCaseTeam(newCase, {
       actorId: creator._id,
       actorName: creator.name,
@@ -296,7 +299,15 @@ router.post('/', authenticateToken, async (req, res) => {
       body: `${creator.name} created ${newCase.caseId}.`
     }, creator._id);
     console.log(`Case ${caseId} created successfully with team:`, newCase.team.map(m => ({ id: m.id?.toString(), name: m.name })));
-    res.status(201).json(newCase);
+    res.status(201).json({
+      ...newCase.toObject(),
+      caseChat: {
+        _id: caseChat._id,
+        caseId: caseChat.caseId,
+        title: caseChat.title,
+        participants: caseChat.participants
+      }
+    });
   } catch (err) {
     console.error('Error creating case:', err.message);
     console.error('Full error:', err);
