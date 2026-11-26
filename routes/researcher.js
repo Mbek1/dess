@@ -203,7 +203,7 @@ router.get('/cases/:id/related', authenticateToken, async (req, res) => {
         .filter(Boolean).join(' ').toLowerCase();
       const sharedTerms = terms.filter(term => candidateText.includes(term));
       const candidateTypes = new Set(candidate.evidence
-        .filter(item => !item.deleted && item.visibleToResearchers === true)
+        .filter(item => !item.deleted && hasResearcherEvidenceAccess(item, req.user.id))
         .map(item => String(item.type || '').toLowerCase()).filter(Boolean));
       const sharedTypes = [...currentEvidenceTypes].filter(type => candidateTypes.has(type));
       const sameCategory = candidate.caseType === current.caseType;
