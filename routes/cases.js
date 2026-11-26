@@ -675,6 +675,54 @@ router.post('/:id/evidence/:evidenceId/verify', requireInvestigatorCaseAccess, a
   }
 });
 
+// GET /api/cases/:id/evidence/:evidenceId/chain-of-custody
+// Returns the chronological, case-team-only record of actions for one evidence item.
+router.get('/:id/evidence/:evidenceId/chain-of-custody', requireInvestigatorCaseAccess, async (req, res) => {
+  try {
+    const caseItem = req.caseItem;
+    const evidence = caseItem.evidence.id(req.params.evidenceId);
+    if (!evidence) return res.status(404).json({ error: 'Evidence not found' });
+
+    const events = caseItem.auditLog
+      .filter(entry => entry.filename === evidence.filename)
+      .map(entry => ({
+        id: entry._id,
+        action: entry.action,
+        type: entry.type,
+        description: entry.description,
+        occurredAt: entry.date,
+        performedBy: {
+          userId: entry.performedBy?.userId,
+          name: entry.performedBy?.name || 'Unknown user'
+        },
+        details: entry.details || {}
+      }))
+      .sort((a, b) => new Date(a.occurredAt || 0) - new Date(b.occurredAt || 0));
+
+    res.json({
+      evidence: {
+        id: evidence._id,
+        name: evidence.name,
+        filename: evidence.filename,
+        originalName: evidence.originalName,
+        fileSize: evidence.fileSize,
+        hashAlgorithm: 'SHA-256',
+        hash: evidence.hash,
+        integrityStatus: evidence.integrityStatus || 'not_checked',
+        uploadedAt: evidence.uploadedAt,
+        deleted: evidence.deleted,
+        deletedAt: evidence.deletedAt || null,
+        deletedReason: evidence.deletedReason || null
+      },
+      eventCount: events.length,
+      events
+    });
+  } catch (err) {
+    logger.error('Failed to retrieve evidence chain of custody:', err.message);
+    res.status(500).json({ error: 'Failed to retrieve evidence chain of custody' });
+  }
+});
+
 // GET /api/cases/:id/evidence/:evidenceId/file - authenticated investigator evidence viewer
 router.get('/:id/evidence/:evidenceId/file', requireInvestigatorCaseAccess, async (req, res) => {
   try {
