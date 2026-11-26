@@ -24,15 +24,15 @@ async function getWorkspace(userId) {
   );
 }
 
-async function getResearchableCase(caseId, evidenceId) {
+async function getResearchableCase(caseId, evidenceId, userId) {
   if (!mongoose.isValidObjectId(caseId)) return { error: 'Invalid case reference', status: 400 };
   const caseItem = await Case.findById(caseId);
-  if (!caseItem || caseItem.status !== 'closed') return { error: 'Only closed repository cases can be saved here', status: 404 };
+  if (!caseItem || caseItem.status !== 'closed' || ['under_review', 'hidden'].includes(caseItem.repositoryStatus || 'visible')) return { error: 'Repository case not found', status: 404 };
   let evidence = null;
   if (evidenceId) {
     if (!mongoose.isValidObjectId(evidenceId)) return { error: 'Invalid evidence reference', status: 400 };
     evidence = caseItem.evidence.id(evidenceId);
-    if (!evidence || evidence.deleted || evidence.visibleToResearchers !== true) {
+    if (!evidence || evidence.deleted || !(evidence.visibleToResearchers === true || (evidence.researcherAccessIds || []).some(id => String(id) === String(userId)))) {
       return { error: 'This evidence item is not available to researchers', status: 403 };
     }
   }
@@ -51,7 +51,7 @@ router.get('/', async (req, res) => {
 router.post('/bookmarks', async (req, res) => {
   try {
     const { caseId, evidenceId } = req.body || {};
-    const access = await getResearchableCase(caseId, evidenceId);
+    const access = await getResearchableCase(caseId, evidenceId, req.user.id);
     if (access.error) return res.status(access.status).json({ error: access.error });
     const workspace = await getWorkspace(req.user.id);
     const duplicate = workspace.bookmarks.some(item =>
