@@ -19,6 +19,7 @@ function publicOrganization(org, userId) {
     website: org.website, location: org.location, verificationStatus: org.verificationStatus,
     memberCount: org.members.filter(item => item.status === 'approved').length,
     membershipStatus: membership?.status || 'none',
+    canManage: Boolean(membership?.role === 'manager' && membership?.status === 'approved'),
     createdAt: org.createdAt
   };
 }
@@ -51,6 +52,7 @@ router.post('/', requireUser, async (req, res) => {
     const normalizedName = name.toLocaleLowerCase().replace(/\s+/g, ' ');
     let org = await Organization.findOne({ normalizedName });
     if (org) return res.status(409).json({ error: 'An organization with this name already exists.', organization: publicOrganization(org, req.user.id) });
+    const creator = await User.findById(req.user.id).select('userType');
     org = await Organization.create({
       name, normalizedName,
       type: ['university', 'research-institution', 'forensics-organization', 'government', 'private-organization', 'other'].includes(req.body.type) ? req.body.type : 'other',
@@ -58,7 +60,7 @@ router.post('/', requireUser, async (req, res) => {
       website: String(req.body.website || '').trim().slice(0, 240),
       location: String(req.body.location || '').trim().slice(0, 160),
       createdBy: req.user.id,
-      members: [{ user: req.user.id, userType: 'researcher', role: 'manager', status: 'approved' }]
+      members: [{ user: req.user.id, userType: creator?.userType || 'researcher', role: 'manager', status: 'approved' }]
     });
     await User.findByIdAndUpdate(req.user.id, { organizationId: org._id, organizationName: org.name });
     res.status(201).json({ organization: publicOrganization(org, req.user.id) });
