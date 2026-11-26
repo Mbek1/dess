@@ -328,7 +328,21 @@ router.get('/admin/reports', async (req, res) => {
     const query = {};
     if (['pending', 'in_review', 'actioned', 'dismissed'].includes(status)) query.status = status;
     const reports = await RepositoryModerationReport.find(query).sort({ createdAt: -1 }).limit(300).lean();
-    res.json({ reports });
+    const discussionIds = reports.filter(item => item.targetType === 'discussion').map(item => item.targetId);
+    const caseIds = [...new Set(reports.map(item => String(item.caseId)))];
+    const [discussions, cases] = await Promise.all([
+      discussionIds.length ? RepositoryDiscussion.find({ _id: { $in: discussionIds } }).select('_id content authorName moderationStatus').lean() : [],
+      caseIds.length ? Case.find({ _id: { $in: caseIds } }).select('_id description').lean() : []
+    ]);
+    const discussionMap = new Map(discussions.map(item => [String(item._id), item]));
+    const caseMap = new Map(cases.map(item => [String(item._id), item]));
+    res.json({ reports: reports.map(report => ({
+      ...report,
+      targetSummary: report.targetType === 'discussion'
+        ? (discussionMap.get(String(report.targetId))?.content || 'The reported contribution is no longer available.')
+        : (caseMap.get(String(report.caseId))?.description || 'No case description available.'),
+      targetAuthor: discussionMap.get(String(report.targetId))?.authorName || ''
+    })) });
   } catch (error) {
     res.status(500).json({ error: 'Could not load repository moderation reports.' });
   }
@@ -343,12 +357,28 @@ router.patch('/admin/reports/:reportId', async (req, res) => {
     if (!['in_review', 'actioned', 'dismissed'].includes(status)) return res.status(400).json({ error: 'Choose in review, actioned or dismissed.' });
     const report = await RepositoryModerationReport.findById(req.params.reportId);
     if (!report) return res.status(404).json({ error: 'Report not found.' });
-    const actor = await User.findById(req.user.id).select('name');
+    const [actor, caseItem] = await Promise.all([
+      User.findById(req.user.id).select('name email'),
+      Case.findById(report.caseId)
+    ]);
     report.status = status;
     report.reviewNote = reviewNote;
     report.reviewedBy = actor?._id || req.user.id;
     report.reviewedAt = new Date();
     await report.save();
+    if (caseItem && actor) {
+      appendCaseAudit(caseItem, actor, 'REPOSITORY_REPORT_REVIEWED',
+        `A repository ${report.targetType} report was marked ${status}`,
+        { reportId: String(report._id), targetType: report.targetType, targetId: String(report.targetId), status, reviewNote });
+      await caseItem.save();
+    }
+    await notifyUser(
+      report.reporterId, actor?._id || req.user.id, actor?.name || 'DESS Administrator',
+      'REPOSITORY_MODERATION',
+      `Your repository report was ${status.replace('_', ' ')}`,
+      reviewNote ? `Case ${report.caseNumber}: ${reviewNote}` : `Your report for ${report.caseNumber} was marked ${status.replace('_', ' ')}.`,
+      caseItem
+    );
     res.json({ report });
   } catch (error) {
     res.status(500).json({ error: 'Could not update the moderation report.' });
