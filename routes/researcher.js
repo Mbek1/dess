@@ -188,7 +188,7 @@ router.get('/cases/:id/related', authenticateToken, async (req, res) => {
     if (currentEvidenceTypes.size) {
       or.push({ evidence: { $elemMatch: {
         deleted: { $ne: true },
-        visibleToResearchers: true,
+        $or: [{ visibleToResearchers: true }, { researcherAccessIds: req.user.id }],
         type: { $in: [...currentEvidenceTypes] }
       } } });
     }
