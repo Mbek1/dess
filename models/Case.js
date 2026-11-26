@@ -26,6 +26,8 @@ const EvidenceSchema = new mongoose.Schema({
   }],
   uploadedAt: { type: Date, default: Date.now },
   visibleToResearchers: { type: Boolean, default: false },
+  // Per-researcher grants are independent of the global researcher visibility switch.
+  researcherAccessIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   deletionRequest: {
     requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     reason: { type: String, trim: true, maxlength: 1000 },
@@ -69,6 +71,11 @@ const CaseSchema = new mongoose.Schema({
   keywords: { type: String },  // New field for case keywords
   docketNumber: { type: String },  // New field for docket number (used instead of courtNumber for court escalation)
   status: { type: String, enum: ['open', 'closed'], default: 'open' },
+  // Repository visibility is separate from operational case status.
+  repositoryStatus: { type: String, enum: ['visible', 'under_review', 'hidden'], default: 'visible', index: true },
+  repositoryModerationReason: { type: String, default: '', maxlength: 1200 },
+  repositoryModeratedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  repositoryModeratedAt: { type: Date, default: null },
   escalationStatus: { type: String, enum: ['police', 'court'], default: 'police' },  // Track case escalation
   escalationDetails: {
     escalatedToCourtDate: { type: Date },
