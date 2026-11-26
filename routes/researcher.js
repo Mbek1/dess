@@ -34,61 +34,178 @@ function sanitizeResearcherCase(caseItem) {
   return result;
 }
 
-// GET /api/researcher/cases - fetch cases (closed + info about open ones if found)
+// Escape user-provided text before using it in a MongoDB regular expression.
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// GET /api/researcher/cases - searchable, filterable closed-case repository.
 router.get('/cases', authenticateToken, async (req, res) => {
   try {
     if (!req.user || req.user.role !== 'researcher') {
       return res.status(403).json({ error: 'Access denied. Only researchers can access this endpoint.' });
     }
 
-    const { search, status, sortBy = 'createdAt', order = 'desc' } = req.query;
+    const search = String(req.query.search || '').trim().slice(0, 120);
+    const caseType = String(req.query.caseType || '').trim().toLowerCase();
+    const evidenceType = String(req.query.evidenceType || '').trim();
+    const organization = String(req.query.organization || '').trim().slice(0, 120);
+    const allowedSorts = ['createdAt', 'updatedAt', 'name', 'caseId', 'caseType'];
+    const sortBy = allowedSorts.includes(String(req.query.sortBy)) ? String(req.query.sortBy) : 'createdAt';
+    const order = req.query.order === 'asc' ? 1 : -1;
 
-    let closedQuery = { status: 'closed' };
-    let searchQuery = {};
-
+    const query = { status: 'closed' };
     if (search) {
-      searchQuery.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { caseId: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
+      const expression = new RegExp(escapeRegex(search), 'i');
+      query.$or = [
+        { name: expression },
+        { caseId: expression },
+        { description: expression },
+        { keywords: expression },
+        {
+          evidence: {
+            $elemMatch: {
+              deleted: { $ne: true },
+              visibleToResearchers: true,
+              $or: [
+                { name: expression },
+                { description: expression },
+                { type: expression },
+                { format: expression }
+              ]
+            }
+          }
+        }
       ];
     }
-
-    // Build full query for both closed and open cases (for search purposes)
-    const fullSearchQuery = { ...closedQuery, ...searchQuery };
-    
-    // But only return closed cases
-    const closedCaseQuery = { ...closedQuery, ...searchQuery };
-
-    const sortOptions = {};
-    sortOptions[sortBy] = order === 'asc' ? 1 : -1;
-
-    // Get closed cases
-    const closedCases = await Case.find(closedCaseQuery)
-      .sort(sortOptions)
-      .limit(100);
-
-    // If search was performed, also check for open cases to return info
-    let openCaseFound = null;
-    if (search) {
-      const openCaseQuery = { status: 'open', ...searchQuery };
-      const openCases = await Case.find(openCaseQuery).limit(1);
-      if (openCases.length > 0) {
-        openCaseFound = openCases[0];
+    if (['civil', 'criminal'].includes(caseType)) query.caseType = caseType;
+    if (evidenceType) query.evidence = {
+      $elemMatch: {
+        deleted: { $ne: true },
+        visibleToResearchers: true,
+        type: new RegExp('^' + escapeRegex(evidenceType) + '$', 'i')
       }
+    };
+    if (organization) {
+      const matchingUsers = await User.find({
+        role: 'investigator',
+        organizationName: { $regex: '^' + escapeRegex(organization) + '$', $options: 'i' }
+      }).select('_id').lean();
+      const userIds = matchingUsers.map(user => user._id);
+      query['createdBy.id'] = { $in: userIds };
     }
 
-    res.json({ 
-      closedCases: closedCases.map(sanitizeResearcherCase),
-      openCaseFound: openCaseFound ? {
-        caseId: openCaseFound.caseId,
-        name: openCaseFound.name,
-        createdBy: openCaseFound.createdBy
-      } : null
+    const sortOptions = { [sortBy]: order, _id: -1 };
+    const closedCases = await Case.find(query).sort(sortOptions).limit(250);
+    let openCaseFound = null;
+    if (search) {
+      const expression = new RegExp(escapeRegex(search), 'i');
+      const openCase = await Case.findOne({
+        status: 'open',
+        $or: [
+          { name: expression },
+          { caseId: expression },
+          { description: expression },
+          { keywords: expression }
+        ]
+      }).select('caseId name createdBy');
+      if (openCase) openCaseFound = {
+        caseId: openCase.caseId,
+        name: openCase.name,
+        createdBy: openCase.createdBy
+      };
+    }
+
+    const cases = closedCases.map(sanitizeResearcherCase);
+    const evidenceTypes = (await Case.distinct('evidence.type', {
+      status: 'closed',
+      'evidence.deleted': { $ne: true },
+      'evidence.visibleToResearchers': true
+    })).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    const organizations = [...new Set(await User.distinct('organizationName', {
+      role: 'investigator',
+      organizationName: { $exists: true, $ne: '' }
+    }))].filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+    res.json({
+      closedCases: cases,
+      total: cases.length,
+      filters: { evidenceTypes, organizations },
+      openCaseFound
     });
   } catch (err) {
-    console.error('Error fetching cases:', err);
+    logger.error('Error fetching researcher cases:', err);
     res.status(500).json({ error: 'Failed to fetch cases' });
+  }
+});
+
+// GET /api/researcher/cases/:id/related - recommend similar closed cases using
+// case classification, keywords, descriptions and researcher-visible evidence types.
+router.get('/cases/:id/related', authenticateToken, async (req, res) => {
+  try {
+    if (!req.user || req.user.role !== 'researcher') {
+      return res.status(403).json({ error: 'Access denied. Only researchers can access related cases.' });
+    }
+    const current = await Case.findById(req.params.id);
+    if (!current || current.status !== 'closed') {
+      return res.status(404).json({ error: 'Closed case not found' });
+    }
+
+    const currentEvidenceTypes = new Set(current.evidence
+      .filter(item => !item.deleted && item.visibleToResearchers === true)
+      .map(item => String(item.type || '').toLowerCase()).filter(Boolean));
+    const sourceText = [current.name, current.description, current.keywords, current.caseId]
+      .filter(Boolean).join(' ').toLowerCase();
+    const terms = [...new Set(sourceText.match(/[a-z0-9]{4,}/g) || [])]
+      .filter(term => !/^\\d+$/.test(term) && !['case', 'evidence', 'with', 'from', 'that', 'this', 'have', 'were', 'into'].includes(term))
+      .slice(0, 12);
+
+    const candidateQuery = {
+      _id: { $ne: current._id },
+      status: 'closed'
+    };
+    const or = [{ caseType: current.caseType }];
+    if (terms.length) {
+      const expression = new RegExp(terms.map(escapeRegex).join('|'), 'i');
+      or.push({ name: expression }, { description: expression }, { keywords: expression });
+    }
+    if (currentEvidenceTypes.size) {
+      or.push({ evidence: { $elemMatch: {
+        deleted: { $ne: true },
+        visibleToResearchers: true,
+        type: { $in: [...currentEvidenceTypes] }
+      } } });
+    }
+    candidateQuery.$or = or;
+
+    const candidates = await Case.find(candidateQuery).sort({ updatedAt: -1 }).limit(60);
+    const ranked = candidates.map(candidate => {
+      const candidateText = [candidate.name, candidate.description, candidate.keywords, candidate.caseId]
+        .filter(Boolean).join(' ').toLowerCase();
+      const sharedTerms = terms.filter(term => candidateText.includes(term));
+      const candidateTypes = new Set(candidate.evidence
+        .filter(item => !item.deleted && item.visibleToResearchers === true)
+        .map(item => String(item.type || '').toLowerCase()).filter(Boolean));
+      const sharedTypes = [...currentEvidenceTypes].filter(type => candidateTypes.has(type));
+      const sameCategory = candidate.caseType === current.caseType;
+      const score = (sameCategory ? 2 : 0) + sharedTerms.length + sharedTypes.length * 2;
+      return { candidate, score, sharedTerms, sharedTypes, reasons: [
+        ...(sameCategory ? ['Same case classification'] : []),
+        ...(sharedTypes.length ? ['Shared evidence type: ' + sharedTypes.join(', ')] : []),
+        ...(sharedTerms.length ? ['Related terms: ' + sharedTerms.slice(0, 4).join(', ')] : [])
+      ] };
+    }).filter(item => item.sharedTerms?.length || item.sharedTypes?.length)
+      .sort((a, b) => b.score - a.score || new Date(b.candidate.updatedAt) - new Date(a.candidate.updatedAt))
+      .slice(0, 5);
+
+    res.json({ relatedCases: ranked.map(({ candidate, score, reasons }) => ({
+      ...sanitizeResearcherCase(candidate),
+      relevanceScore: score,
+      relevanceReasons: reasons
+    })) });
+  } catch (err) {
+    logger.error('Error finding related researcher cases:', err);
+    res.status(500).json({ error: 'Failed to find related cases' });
   }
 });
 
