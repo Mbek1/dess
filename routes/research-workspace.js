@@ -180,7 +180,7 @@ router.post('/collections', async (req, res) => {
     const caseIds = Array.isArray(req.body?.caseIds) ? [...new Set(req.body.caseIds.map(String))] : [];
     if (caseIds.some(id => !mongoose.isValidObjectId(id))) return res.status(400).json({ error: 'One or more case references are invalid' });
     if (caseIds.length) {
-      const count = await Case.countDocuments({ _id: { $in: caseIds }, status: 'closed' });
+      const count = await Case.countDocuments({ _id: { $in: caseIds }, status: 'closed', repositoryStatus: { $nin: ['under_review', 'hidden'] } });
       if (count !== caseIds.length) return res.status(403).json({ error: 'Collections can contain only closed repository cases' });
     }
     const workspace = await getWorkspace(req.user.id);
@@ -214,7 +214,7 @@ router.patch('/collections/:collectionId', async (req, res) => {
         return res.status(400).json({ error: 'Invalid collection case list' });
       }
       const ids = [...new Set(req.body.caseIds.map(String))];
-      const count = ids.length ? await Case.countDocuments({ _id: { $in: ids }, status: 'closed' }) : 0;
+      const count = ids.length ? await Case.countDocuments({ _id: { $in: ids }, status: 'closed', repositoryStatus: { $nin: ['under_review', 'hidden'] } }) : 0;
       if (count !== ids.length) return res.status(403).json({ error: 'Collections can contain only closed repository cases' });
       collection.caseIds = ids;
     }
@@ -242,11 +242,25 @@ router.delete('/collections/:collectionId', async (req, res) => {
 router.get('/export', async (req, res) => {
   try {
     const workspace = await getWorkspace(req.user.id);
+    const bookmarkCaseIds = [...new Set(workspace.bookmarks.map(item => String(item.caseId)))];
+    const bookmarkCases = bookmarkCaseIds.length ? await Case.find({ _id: { $in: bookmarkCaseIds } })
+      .select('_id status repositoryStatus evidence').lean() : [];
+    const bookmarkCaseMap = new Map(bookmarkCases.map(item => [String(item._id), item]));
+    const exportBookmarks = workspace.bookmarks.filter(bookmark => {
+      const caseItem = bookmarkCaseMap.get(String(bookmark.caseId));
+      if (!caseItem || caseItem.status !== 'closed' || ['under_review', 'hidden'].includes(caseItem.repositoryStatus || 'visible')) return false;
+      if (!bookmark.evidenceId) return true;
+      const evidence = (caseItem.evidence || []).find(item => String(item._id) === String(bookmark.evidenceId));
+      return Boolean(evidence && !evidence.deleted && (
+        evidence.visibleToResearchers === true ||
+        (evidence.researcherAccessIds || []).some(id => String(id?._id || id) === String(req.user.id))
+      ));
+    });
     const escapeHtml = value => String(value || '').replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
     const sections = [
       '<h1>DESS Research Workspace</h1>',
       '<p>Personal research export. This document contains your bookmarks, notes and collection details; it does not include original evidence files.</p>',
-      '<h2>Bookmarks</h2><ul>' + workspace.bookmarks.map(item => '<li><strong>' + escapeHtml(item.caseReference) + ' — ' + escapeHtml(item.caseTitle) + '</strong>' + (item.evidenceName ? ' / ' + escapeHtml(item.evidenceName) : '') + '</li>').join('') + '</ul>',
+      '<h2>Bookmarks</h2><ul>' + exportBookmarks.map(item => '<li><strong>' + escapeHtml(item.caseReference) + ' — ' + escapeHtml(item.caseTitle) + '</strong>' + (item.evidenceName ? ' / ' + escapeHtml(item.evidenceName) : '') + '</li>').join('') + '</ul>',
       '<h2>Research Notes</h2>' + workspace.notes.map(note => '<section><h3>' + escapeHtml(note.title) + '</h3><p><strong>' + escapeHtml(note.caseReference) + ' — ' + escapeHtml(note.caseTitle) + (note.evidenceName ? ' / ' + escapeHtml(note.evidenceName) : '') + '</strong></p><p>' + escapeHtml(note.content).replace(/\n/g, '<br>') + '</p></section>').join(''),
       '<h2>Collections</h2>' + workspace.collections.map(item => '<section><h3>' + escapeHtml(item.name) + '</h3><p>' + escapeHtml(item.description) + '</p><p>Cases saved: ' + item.caseIds.length + '</p></section>').join('')
     ];
