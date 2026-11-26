@@ -167,6 +167,7 @@ app.use('/api/evidence', require('./routes/evidence'));
 
 // User management
 app.use('/api/users', require('./routes/users'));
+app.use('/api/organizations', require('./routes/organizations'));
 
 // Messaging
 app.use('/api/messages', require('./routes/messages'));
