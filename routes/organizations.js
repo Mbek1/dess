@@ -96,6 +96,23 @@ router.post('/:id/join', requireUser, async (req, res) => {
   }
 });
 
+// Public profile for an authenticated directory user. Only approved member names and
+// academic categories are exposed; email addresses and pending requests remain private.
+router.get('/:id', requireUser, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid organization ID' });
+    const org = await Organization.findById(req.params.id).populate('members.user', 'name userType');
+    if (!org || org.verificationStatus === 'rejected') return res.status(404).json({ error: 'Organization not found' });
+    const approvedMembers = org.members
+      .filter(item => item.status === 'approved' && item.user)
+      .map(item => ({ name: item.user.name, userType: item.userType || item.user.userType || 'researcher' }));
+    res.json({
+      organization: publicOrganization(org, req.user.id, isAdmin(req)),
+      members: approvedMembers
+    });
+  } catch (err) { res.status(500).json({ error: 'Could not load organization profile' }); }
+});
+
 // Organization managers review membership requests.
 router.get('/:id/members', requireUser, async (req, res) => {
   try {
