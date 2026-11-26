@@ -39,7 +39,7 @@ async function notifyUser(recipientId, actorId, actorName, kind, title, body, ca
     await Notification.create({
       recipientId, actorId, actorName, kind, title, body,
       caseId: caseItem?._id, caseNumber: caseItem?.caseId,
-      link: '/researcher'
+      link: kind === 'REPOSITORY_ACCESS_REQUEST' ? '/repository-access-requests' : '/researcher'
     });
   } catch (error) {
     // Notification failures must not roll back a permission or moderation decision.
