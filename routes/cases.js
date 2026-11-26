@@ -65,21 +65,24 @@ function getUploadedEvidencePath(filename) {
   return fs.existsSync(legacyPath) ? legacyPath : null;
 }
 
-function sanitizeResearcherCase(caseItem) {
+function hasResearcherEvidenceAccess(item, userId) {
+  return item.visibleToResearchers === true ||
+    (item.researcherAccessIds || []).some(id => String(id?._id || id) === String(userId));
+}
+
+function sanitizeResearcherCase(caseItem, userId) {
   const result = caseItem.toObject();
-  const restrictedFiles = new Set(result.evidence.filter(evidence => evidence.visibleToResearchers !== true).map(evidence => evidence.filename));
-  result.evidence = result.evidence.filter(evidence => !evidence.deleted).map(evidence => evidence.visibleToResearchers === true
-    ? {
-        _id: evidence._id,
-        name: evidence.name,
-        description: evidence.description,
-        type: evidence.type,
-        format: evidence.format,
-        uploadedAt: evidence.uploadedAt,
-        availableToResearchers: true,
-        hash: evidence.hash
-      }
-    : { _id: evidence._id, availableToResearchers: false });
+  const restrictedFiles = new Set(result.evidence
+    .filter(item => !hasResearcherEvidenceAccess(item, userId))
+    .map(item => item.filename));
+  result.evidence = result.evidence.filter(item => !item.deleted).map(item =>
+    hasResearcherEvidenceAccess(item, userId)
+      ? {
+          _id: item._id, name: item.name, description: item.description,
+          type: item.type, format: item.format, uploadedAt: item.uploadedAt,
+          availableToResearchers: true, hash: item.hash
+        }
+      : { _id: item._id, availableToResearchers: false });
   result.auditLog = result.auditLog.filter(log => !log.filename || !restrictedFiles.has(log.filename));
   result.closureDocs = result.closureDocs.map(({ filename, originalname, uploadedAt }) => ({ filename, originalname, uploadedAt }));
   return result;
@@ -124,14 +127,15 @@ router.get('/', authenticateToken, async (req, res) => {
     } else if (userRole === 'researcher') {
       // Researchers see only closed cases (for research purposes)
       cases = await Case.find({
-        status: 'closed'
+        status: 'closed',
+        repositoryStatus: { $nin: ['under_review', 'hidden'] }
       });
     } else {
       // Default: no cases
       cases = [];
     }
 
-    res.json(userRole === 'researcher' ? cases.map(sanitizeResearcherCase) : cases);
+    res.json(userRole === 'researcher' ? cases.map(item => sanitizeResearcherCase(item, req.user.id)) : cases);
   } catch (err) {
     logger.error('Error fetching cases:', err.message);
     res.status(500).json({ error: 'Failed to fetch cases' });
@@ -171,21 +175,10 @@ router.get('/:id', authenticateToken, async (req, res) => {
       console.log(`Access GRANTED: User ${userId} is in team`);
     } else if (req.user.role === 'researcher') {
       // Researchers can see only closed cases
-      if (caseItem.status !== 'closed') {
-        return res.status(403).json({ error: 'Access denied. Only closed cases are visible to researchers.' });
+      if (caseItem.status !== 'closed' || ['under_review', 'hidden'].includes(caseItem.repositoryStatus || 'visible')) {
+        return res.status(404).json({ error: 'Repository case not found.' });
       }
-      const researcherCase = caseItem.toObject();
-      researcherCase.evidence = researcherCase.evidence.filter(item => !item.deleted).map(item => ({
-        _id: item._id,
-        name: item.name,
-        description: item.description,
-        type: item.type,
-        format: item.format,
-        uploadedAt: item.uploadedAt,
-        availableToResearchers: item.visibleToResearchers === true,
-        ...(item.visibleToResearchers ? { hash: item.hash } : {})
-      }));
-      return res.json(researcherCase);
+      return res.json(sanitizeResearcherCase(caseItem, req.user.id));
     } else {
       // Other roles cannot access cases
       return res.status(403).json({ error: 'Access denied. You do not have permission to view this case.' });
