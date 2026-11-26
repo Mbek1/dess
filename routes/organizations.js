@@ -50,6 +50,10 @@ router.post('/', requireUser, async (req, res) => {
     if (!['researcher', 'investigator'].includes(req.user.role)) return res.status(403).json({ error: 'This account cannot create an organization.' });
     const name = String(req.body.name || '').trim();
     if (name.length < 3 || name.length > 140) return res.status(400).json({ error: 'Organization name must be between 3 and 140 characters.' });
+    const currentUser = await User.findById(req.user.id).select('organizationId');
+    if (currentUser?.organizationId) {
+      return res.status(409).json({ error: 'Your profile is already linked to an organisation. Contact an administrator if you need to change it.' });
+    }
     const normalizedName = name.toLocaleLowerCase().replace(/\s+/g, ' ');
     let org = await Organization.findOne({ normalizedName });
     if (org) return res.status(409).json({ error: 'An organization with this name already exists.', organization: publicOrganization(org, req.user.id) });
