@@ -14,6 +14,9 @@ const NotificationSchema = new mongoose.Schema({
       'CASE_UPDATE',
       'CASE_CLOSED',
       'CASE_CHAT_MESSAGE',
+      'REPOSITORY_DISCUSSION_REPLY',
+      'RESEARCH_COLLABORATION_REQUEST',
+      'RESEARCH_COLLABORATION_RESPONSE',
       'MESSAGE'
     ],
     required: true
