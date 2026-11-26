@@ -12,7 +12,7 @@ function requireUser(req, res, next) {
   next();
 }
 function isAdmin(req) { return req.user?.role === 'admin'; }
-function publicOrganization(org, userId) {
+function publicOrganization(org, userId, admin = false) {
   const membership = org.members.find(item => String(item.user) === String(userId));
   return {
     _id: org._id, name: org.name, type: org.type, description: org.description,
@@ -20,6 +20,7 @@ function publicOrganization(org, userId) {
     memberCount: org.members.filter(item => item.status === 'approved').length,
     membershipStatus: membership?.status || 'none',
     canManage: Boolean(membership?.role === 'manager' && membership?.status === 'approved'),
+    canVerify: admin,
     createdAt: org.createdAt
   };
 }
@@ -37,7 +38,7 @@ router.get('/', requireUser, async (req, res) => {
       { location: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }
     ];
     const organizations = await Organization.find(query).sort({ verificationStatus: 1, name: 1 }).limit(100);
-    res.json({ organizations: organizations.map(org => publicOrganization(org, req.user.id)) });
+    res.json({ organizations: organizations.map(org => publicOrganization(org, req.user.id, isAdmin(req))) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load organizations' });
   }
@@ -73,6 +74,10 @@ router.post('/', requireUser, async (req, res) => {
 router.post('/:id/join', requireUser, async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid organization ID' });
+    const currentUser = await User.findById(req.user.id).select('organizationId');
+    if (currentUser?.organizationId && String(currentUser.organizationId) !== String(req.params.id)) {
+      return res.status(409).json({ error: 'Your profile is already linked to another organisation. Contact an administrator if this needs to change.' });
+    }
     const org = await Organization.findById(req.params.id);
     if (!org || org.verificationStatus === 'rejected') return res.status(404).json({ error: 'Organization not found' });
     const existing = org.members.find(item => String(item.user) === req.user.id);
@@ -115,6 +120,12 @@ router.patch('/:id/members/:membershipId', requireUser, async (req, res) => {
     if (!member) return res.status(404).json({ error: 'Membership request not found' });
     const status = req.body.status;
     if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Status must be approved or rejected.' });
+    if (status === 'approved') {
+      const targetUser = await User.findById(member.user).select('organizationId');
+      if (targetUser?.organizationId && String(targetUser.organizationId) !== String(org._id)) {
+        return res.status(409).json({ error: 'This user is already linked to another organisation.' });
+      }
+    }
     member.status = status; member.reviewedAt = new Date(); member.reviewedBy = req.user.id;
     if (status === 'approved') {
       await User.findByIdAndUpdate(member.user, { organizationId: org._id, organizationName: org.name });
