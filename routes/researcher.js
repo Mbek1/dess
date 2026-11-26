@@ -14,21 +14,34 @@ const { authenticateToken } = require('../middleware/auth');
 // Apply authentication middleware to all routes
 router.use(authenticateToken);
 
-function sanitizeResearcherCase(caseItem) {
+function isRepositoryCaseVisible(caseItem) {
+  return Boolean(caseItem && caseItem.status === 'closed' &&
+    !['under_review', 'hidden'].includes(caseItem.repositoryStatus || 'visible'));
+}
+
+function hasResearcherEvidenceAccess(item, userId) {
+  return item.visibleToResearchers === true ||
+    (item.researcherAccessIds || []).some(id => String(id?._id || id) === String(userId));
+}
+
+function sanitizeResearcherCase(caseItem, userId) {
   const result = caseItem.toObject();
-  const restrictedFiles = new Set(result.evidence.filter(item => item.visibleToResearchers !== true).map(item => item.filename));
-  result.evidence = result.evidence.filter(item => !item.deleted).map(item => item.visibleToResearchers === true
-    ? {
-        _id: item._id,
-        name: item.name,
-        description: item.description,
-        type: item.type,
-        format: item.format,
-        uploadedAt: item.uploadedAt,
-        availableToResearchers: true,
-        hash: item.hash
-      }
-    : { _id: item._id, availableToResearchers: false });
+  const restrictedFiles = new Set(result.evidence
+    .filter(item => !hasResearcherEvidenceAccess(item, userId))
+    .map(item => item.filename));
+  result.evidence = result.evidence.filter(item => !item.deleted).map(item =>
+    hasResearcherEvidenceAccess(item, userId)
+      ? {
+          _id: item._id,
+          name: item.name,
+          description: item.description,
+          type: item.type,
+          format: item.format,
+          uploadedAt: item.uploadedAt,
+          availableToResearchers: true,
+          hash: item.hash
+        }
+      : { _id: item._id, availableToResearchers: false });
   result.auditLog = result.auditLog.filter(log => !log.filename || !restrictedFiles.has(log.filename));
   result.closureDocs = result.closureDocs.map(({ filename, originalname, uploadedAt }) => ({ filename, originalname, uploadedAt }));
   return result;
@@ -54,7 +67,7 @@ router.get('/cases', authenticateToken, async (req, res) => {
     const sortBy = allowedSorts.includes(String(req.query.sortBy)) ? String(req.query.sortBy) : 'createdAt';
     const order = req.query.order === 'asc' ? 1 : -1;
 
-    const query = { status: 'closed' };
+    const query = { status: 'closed', repositoryStatus: { $nin: ['under_review', 'hidden'] } };
     if (search) {
       const expression = new RegExp(escapeRegex(search), 'i');
       query.$or = [
@@ -66,12 +79,14 @@ router.get('/cases', authenticateToken, async (req, res) => {
           evidence: {
             $elemMatch: {
               deleted: { $ne: true },
-              visibleToResearchers: true,
-              $or: [
-                { name: expression },
-                { description: expression },
-                { type: expression },
-                { format: expression }
+              $and: [
+                { $or: [{ visibleToResearchers: true }, { researcherAccessIds: req.user.id }] },
+                { $or: [
+                  { name: expression },
+                  { description: expression },
+                  { type: expression },
+                  { format: expression }
+                ] }
               ]
             }
           }
@@ -82,7 +97,7 @@ router.get('/cases', authenticateToken, async (req, res) => {
     if (evidenceType) query.evidence = {
       $elemMatch: {
         deleted: { $ne: true },
-        visibleToResearchers: true,
+        $or: [{ visibleToResearchers: true }, { researcherAccessIds: req.user.id }],
         type: new RegExp('^' + escapeRegex(evidenceType) + '$', 'i')
       }
     };
@@ -116,11 +131,14 @@ router.get('/cases', authenticateToken, async (req, res) => {
       };
     }
 
-    const cases = closedCases.map(sanitizeResearcherCase);
+    const cases = closedCases.map(item => sanitizeResearcherCase(item, req.user.id));
     const evidenceTypes = (await Case.distinct('evidence.type', {
       status: 'closed',
-      'evidence.deleted': { $ne: true },
-      'evidence.visibleToResearchers': true
+      repositoryStatus: { $nin: ['under_review', 'hidden'] },
+      evidence: { $elemMatch: {
+        deleted: { $ne: true },
+        $or: [{ visibleToResearchers: true }, { researcherAccessIds: req.user.id }]
+      } }
     })).filter(Boolean).sort((a, b) => a.localeCompare(b));
     const organizations = [...new Set(await User.distinct('organizationName', {
       role: 'investigator',
@@ -147,12 +165,12 @@ router.get('/cases/:id/related', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied. Only researchers can access related cases.' });
     }
     const current = await Case.findById(req.params.id);
-    if (!current || current.status !== 'closed') {
+    if (!isRepositoryCaseVisible(current)) {
       return res.status(404).json({ error: 'Closed case not found' });
     }
 
     const currentEvidenceTypes = new Set(current.evidence
-      .filter(item => !item.deleted && item.visibleToResearchers === true)
+      .filter(item => !item.deleted && hasResearcherEvidenceAccess(item, req.user.id))
       .map(item => String(item.type || '').toLowerCase()).filter(Boolean));
     const sourceText = [current.name, current.description, current.keywords, current.caseId]
       .filter(Boolean).join(' ').toLowerCase();
@@ -162,7 +180,8 @@ router.get('/cases/:id/related', authenticateToken, async (req, res) => {
 
     const candidateQuery = {
       _id: { $ne: current._id },
-      status: 'closed'
+      status: 'closed',
+      repositoryStatus: { $nin: ['under_review', 'hidden'] }
     };
     const or = [{ caseType: current.caseType }];
     if (terms.length) {
@@ -172,7 +191,7 @@ router.get('/cases/:id/related', authenticateToken, async (req, res) => {
     if (currentEvidenceTypes.size) {
       or.push({ evidence: { $elemMatch: {
         deleted: { $ne: true },
-        visibleToResearchers: true,
+        $or: [{ visibleToResearchers: true }, { researcherAccessIds: req.user.id }],
         type: { $in: [...currentEvidenceTypes] }
       } } });
     }
@@ -184,7 +203,7 @@ router.get('/cases/:id/related', authenticateToken, async (req, res) => {
         .filter(Boolean).join(' ').toLowerCase();
       const sharedTerms = terms.filter(term => candidateText.includes(term));
       const candidateTypes = new Set(candidate.evidence
-        .filter(item => !item.deleted && item.visibleToResearchers === true)
+        .filter(item => !item.deleted && hasResearcherEvidenceAccess(item, req.user.id))
         .map(item => String(item.type || '').toLowerCase()).filter(Boolean));
       const sharedTypes = [...currentEvidenceTypes].filter(type => candidateTypes.has(type));
       const sameCategory = candidate.caseType === current.caseType;
@@ -199,7 +218,7 @@ router.get('/cases/:id/related', authenticateToken, async (req, res) => {
       .slice(0, 5);
 
     res.json({ relatedCases: ranked.map(({ candidate, score, reasons }) => ({
-      ...sanitizeResearcherCase(candidate),
+      ...sanitizeResearcherCase(candidate, req.user.id),
       relevanceScore: score,
       relevanceReasons: reasons
     })) });
@@ -221,12 +240,11 @@ router.get('/cases/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Case not found' });
     }
 
-    // Researchers can only see closed cases
-    if (caseItem.status !== 'closed') {
-      return res.status(403).json({ error: 'Access denied. Only closed cases are visible to researchers.' });
+    if (!isRepositoryCaseVisible(caseItem)) {
+      return res.status(404).json({ error: 'Repository case not found.' });
     }
 
-    res.json(sanitizeResearcherCase(caseItem));
+    res.json(sanitizeResearcherCase(caseItem, req.user.id));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch case' });
   }
@@ -244,9 +262,8 @@ router.get('/cases/:id/download', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Case not found' });
     }
 
-    // Researchers can only download closed cases
-    if (caseItem.status !== 'closed') {
-      return res.status(403).json({ error: 'Access denied. Only closed cases can be downloaded.' });
+    if (!isRepositoryCaseVisible(caseItem)) {
+      return res.status(404).json({ error: 'Repository case not found.' });
     }
 
     // Populate team member details including job titles
@@ -270,8 +287,8 @@ router.get('/cases/:id/download', authenticateToken, async (req, res) => {
 
     const zip = new AdmZip();
     const activeEvidence = caseItem.evidence.filter(evidence => !evidence.deleted);
-    const downloadableEvidence = activeEvidence.filter(evidence => evidence.visibleToResearchers === true);
-    const restrictedEvidence = activeEvidence.filter(evidence => evidence.visibleToResearchers !== true);
+    const downloadableEvidence = activeEvidence.filter(evidence => hasResearcherEvidenceAccess(evidence, req.user.id));
+    const restrictedEvidence = activeEvidence.filter(evidence => !hasResearcherEvidenceAccess(evidence, req.user.id));
     const restrictedFilenames = new Set(restrictedEvidence.map(evidence => evidence.filename));
     const researcherAuditLog = caseItem.auditLog.filter(log => !log.filename || !restrictedFilenames.has(log.filename));
 

@@ -17,6 +17,9 @@ const NotificationSchema = new mongoose.Schema({
       'REPOSITORY_DISCUSSION_REPLY',
       'RESEARCH_COLLABORATION_REQUEST',
       'RESEARCH_COLLABORATION_RESPONSE',
+      'REPOSITORY_MODERATION',
+      'REPOSITORY_ACCESS_RESPONSE',
+      'REPOSITORY_ACCESS_REQUEST',
       'MESSAGE'
     ],
     required: true

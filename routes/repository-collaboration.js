@@ -21,7 +21,7 @@ router.use(requireResearcher);
 async function getClosedCase(caseId) {
   if (!mongoose.isValidObjectId(caseId)) return null;
   const caseItem = await Case.findById(caseId);
-  return caseItem && caseItem.status === 'closed' ? caseItem : null;
+  return caseItem && caseItem.status === 'closed' && !['under_review', 'hidden'].includes(caseItem.repositoryStatus || 'visible') ? caseItem : null;
 }
 
 async function getActor(userId) {
@@ -44,10 +44,14 @@ function authorView(item, currentUserId, profiles) {
 function discussionView(item, currentUserId, profiles) {
   return {
     ...item,
+    content: item.moderationStatus === 'hidden' ? 'This contribution is temporarily hidden by a moderator.' : item.content,
+    isModerated: item.moderationStatus === 'hidden',
     author: authorView(item, currentUserId, profiles),
     isMine: String(item.authorId) === String(currentUserId),
     replies: (item.replies || []).map(reply => ({
       ...reply,
+      content: reply.moderationStatus === 'hidden' ? 'This contribution is temporarily hidden by a moderator.' : reply.content,
+      isModerated: reply.moderationStatus === 'hidden',
       author: authorView(reply, currentUserId, profiles),
       isMine: String(reply.authorId) === String(currentUserId)
     }))
@@ -110,7 +114,8 @@ router.post('/cases/:caseId/discussions', async (req, res) => {
         _id: req.body.parentDiscussionId,
         caseId: caseItem._id,
         parentDiscussionId: null,
-        isDeleted: false
+        isDeleted: false,
+        moderationStatus: { $ne: 'hidden' }
       });
       if (!parent) return res.status(404).json({ error: 'Discussion thread not found' });
     }
@@ -155,6 +160,7 @@ router.patch('/discussions/:discussionId/pin', async (req, res) => {
       _id: req.params.discussionId,
       parentDiscussionId: null,
       isDeleted: false,
+      moderationStatus: { $ne: 'hidden' },
       authorId: req.user.id
     });
     if (!discussion) return res.status(404).json({ error: 'Only the author can pin their own discussion thread' });
@@ -176,7 +182,8 @@ router.delete('/discussions/:discussionId', async (req, res) => {
     const discussion = await RepositoryDiscussion.findOne({
       _id: req.params.discussionId,
       authorId: req.user.id,
-      isDeleted: false
+      isDeleted: false,
+      moderationStatus: { $ne: 'hidden' }
     });
     if (!discussion) return res.status(404).json({ error: 'Discussion not found' });
     discussion.isDeleted = true;
@@ -210,7 +217,8 @@ router.post('/cases/:caseId/collaboration-requests', async (req, res) => {
     const hasContributed = await RepositoryDiscussion.exists({
       caseId: caseItem._id,
       authorId: recipient._id,
-      isDeleted: false
+      isDeleted: false,
+      moderationStatus: { $ne: 'hidden' }
     });
     if (!hasContributed) return res.status(403).json({ error: 'You can invite researchers who have participated in this case discussion' });
 

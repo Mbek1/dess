@@ -24,15 +24,15 @@ async function getWorkspace(userId) {
   );
 }
 
-async function getResearchableCase(caseId, evidenceId) {
+async function getResearchableCase(caseId, evidenceId, userId) {
   if (!mongoose.isValidObjectId(caseId)) return { error: 'Invalid case reference', status: 400 };
   const caseItem = await Case.findById(caseId);
-  if (!caseItem || caseItem.status !== 'closed') return { error: 'Only closed repository cases can be saved here', status: 404 };
+  if (!caseItem || caseItem.status !== 'closed' || ['under_review', 'hidden'].includes(caseItem.repositoryStatus || 'visible')) return { error: 'Repository case not found', status: 404 };
   let evidence = null;
   if (evidenceId) {
     if (!mongoose.isValidObjectId(evidenceId)) return { error: 'Invalid evidence reference', status: 400 };
     evidence = caseItem.evidence.id(evidenceId);
-    if (!evidence || evidence.deleted || evidence.visibleToResearchers !== true) {
+    if (!evidence || evidence.deleted || !(evidence.visibleToResearchers === true || (evidence.researcherAccessIds || []).some(id => String(id) === String(userId)))) {
       return { error: 'This evidence item is not available to researchers', status: 403 };
     }
   }
@@ -42,7 +42,33 @@ async function getResearchableCase(caseId, evidenceId) {
 router.get('/', async (req, res) => {
   try {
     const workspace = await getWorkspace(req.user.id);
-    res.json(workspace);
+    const result = workspace.toObject();
+    const caseIds = [...new Set(result.bookmarks.map(item => String(item.caseId)))];
+    const cases = caseIds.length ? await Case.find({ _id: { $in: caseIds } })
+      .select('_id caseId name status repositoryStatus evidence').lean() : [];
+    const caseMap = new Map(cases.map(item => [String(item._id), item]));
+    result.bookmarks = result.bookmarks.filter(bookmark => {
+      const caseItem = caseMap.get(String(bookmark.caseId));
+      if (!caseItem || caseItem.status !== 'closed' || ['under_review', 'hidden'].includes(caseItem.repositoryStatus || 'visible')) return false;
+      if (!bookmark.evidenceId) return true;
+      const evidence = (caseItem.evidence || []).find(item => String(item._id) === String(bookmark.evidenceId));
+      return Boolean(evidence && !evidence.deleted && (
+        evidence.visibleToResearchers === true ||
+        (evidence.researcherAccessIds || []).some(id => String(id?._id || id) === String(req.user.id))
+      ));
+    }).map(bookmark => {
+      const caseItem = caseMap.get(String(bookmark.caseId));
+      if (caseItem) {
+        bookmark.caseReference = caseItem.caseId;
+        bookmark.caseTitle = caseItem.name;
+        if (bookmark.evidenceId) {
+          const evidence = (caseItem.evidence || []).find(item => String(item._id) === String(bookmark.evidenceId));
+          bookmark.evidenceName = evidence?.name || '';
+        }
+      }
+      return bookmark;
+    });
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: 'Could not load research workspace' });
   }
@@ -51,7 +77,7 @@ router.get('/', async (req, res) => {
 router.post('/bookmarks', async (req, res) => {
   try {
     const { caseId, evidenceId } = req.body || {};
-    const access = await getResearchableCase(caseId, evidenceId);
+    const access = await getResearchableCase(caseId, evidenceId, req.user.id);
     if (access.error) return res.status(access.status).json({ error: access.error });
     const workspace = await getWorkspace(req.user.id);
     const duplicate = workspace.bookmarks.some(item =>
@@ -92,7 +118,7 @@ router.post('/notes', async (req, res) => {
     if (!String(title || '').trim() || !String(content || '').trim()) {
       return res.status(400).json({ error: 'A note title and content are required' });
     }
-    const access = await getResearchableCase(caseId, evidenceId);
+    const access = await getResearchableCase(caseId, evidenceId, req.user.id);
     if (access.error) return res.status(access.status).json({ error: access.error });
     const workspace = await getWorkspace(req.user.id);
     workspace.notes.push({
@@ -154,7 +180,7 @@ router.post('/collections', async (req, res) => {
     const caseIds = Array.isArray(req.body?.caseIds) ? [...new Set(req.body.caseIds.map(String))] : [];
     if (caseIds.some(id => !mongoose.isValidObjectId(id))) return res.status(400).json({ error: 'One or more case references are invalid' });
     if (caseIds.length) {
-      const count = await Case.countDocuments({ _id: { $in: caseIds }, status: 'closed' });
+      const count = await Case.countDocuments({ _id: { $in: caseIds }, status: 'closed', repositoryStatus: { $nin: ['under_review', 'hidden'] } });
       if (count !== caseIds.length) return res.status(403).json({ error: 'Collections can contain only closed repository cases' });
     }
     const workspace = await getWorkspace(req.user.id);
@@ -188,7 +214,7 @@ router.patch('/collections/:collectionId', async (req, res) => {
         return res.status(400).json({ error: 'Invalid collection case list' });
       }
       const ids = [...new Set(req.body.caseIds.map(String))];
-      const count = ids.length ? await Case.countDocuments({ _id: { $in: ids }, status: 'closed' }) : 0;
+      const count = ids.length ? await Case.countDocuments({ _id: { $in: ids }, status: 'closed', repositoryStatus: { $nin: ['under_review', 'hidden'] } }) : 0;
       if (count !== ids.length) return res.status(403).json({ error: 'Collections can contain only closed repository cases' });
       collection.caseIds = ids;
     }
@@ -216,11 +242,25 @@ router.delete('/collections/:collectionId', async (req, res) => {
 router.get('/export', async (req, res) => {
   try {
     const workspace = await getWorkspace(req.user.id);
+    const bookmarkCaseIds = [...new Set(workspace.bookmarks.map(item => String(item.caseId)))];
+    const bookmarkCases = bookmarkCaseIds.length ? await Case.find({ _id: { $in: bookmarkCaseIds } })
+      .select('_id status repositoryStatus evidence').lean() : [];
+    const bookmarkCaseMap = new Map(bookmarkCases.map(item => [String(item._id), item]));
+    const exportBookmarks = workspace.bookmarks.filter(bookmark => {
+      const caseItem = bookmarkCaseMap.get(String(bookmark.caseId));
+      if (!caseItem || caseItem.status !== 'closed' || ['under_review', 'hidden'].includes(caseItem.repositoryStatus || 'visible')) return false;
+      if (!bookmark.evidenceId) return true;
+      const evidence = (caseItem.evidence || []).find(item => String(item._id) === String(bookmark.evidenceId));
+      return Boolean(evidence && !evidence.deleted && (
+        evidence.visibleToResearchers === true ||
+        (evidence.researcherAccessIds || []).some(id => String(id?._id || id) === String(req.user.id))
+      ));
+    });
     const escapeHtml = value => String(value || '').replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
     const sections = [
       '<h1>DESS Research Workspace</h1>',
       '<p>Personal research export. This document contains your bookmarks, notes and collection details; it does not include original evidence files.</p>',
-      '<h2>Bookmarks</h2><ul>' + workspace.bookmarks.map(item => '<li><strong>' + escapeHtml(item.caseReference) + ' — ' + escapeHtml(item.caseTitle) + '</strong>' + (item.evidenceName ? ' / ' + escapeHtml(item.evidenceName) : '') + '</li>').join('') + '</ul>',
+      '<h2>Bookmarks</h2><ul>' + exportBookmarks.map(item => '<li><strong>' + escapeHtml(item.caseReference) + ' — ' + escapeHtml(item.caseTitle) + '</strong>' + (item.evidenceName ? ' / ' + escapeHtml(item.evidenceName) : '') + '</li>').join('') + '</ul>',
       '<h2>Research Notes</h2>' + workspace.notes.map(note => '<section><h3>' + escapeHtml(note.title) + '</h3><p><strong>' + escapeHtml(note.caseReference) + ' — ' + escapeHtml(note.caseTitle) + (note.evidenceName ? ' / ' + escapeHtml(note.evidenceName) : '') + '</strong></p><p>' + escapeHtml(note.content).replace(/\n/g, '<br>') + '</p></section>').join(''),
       '<h2>Collections</h2>' + workspace.collections.map(item => '<section><h3>' + escapeHtml(item.name) + '</h3><p>' + escapeHtml(item.description) + '</p><p>Cases saved: ' + item.caseIds.length + '</p></section>').join('')
     ];
