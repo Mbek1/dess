@@ -195,19 +195,24 @@ router.patch('/access-requests/:requestId/review', async (req, res) => {
 
     const accessRequest = await RepositoryAccessRequest.findOne({ _id: req.params.requestId, status: 'pending' });
     if (!accessRequest) return res.status(404).json({ error: 'Pending access request not found.' });
-    const [caseItem, actor] = await Promise.all([
+    const [caseItem, actor, requester] = await Promise.all([
       Case.findById(accessRequest.caseId),
-      User.findById(req.user.id).select('name email role active')
+      User.findById(req.user.id).select('name email role active'),
+      User.findById(accessRequest.requesterId).select('role active')
     ]);
     if (!caseItem || !isAssigned(caseItem, req.user.id)) return res.status(403).json({ error: 'You are not assigned to this case.' });
     if (!isRepositoryCaseVisible(caseItem)) return res.status(409).json({ error: 'The case is no longer available in the research archive.' });
     if (!actor || actor.active === false) return res.status(403).json({ error: 'An active investigator account is required.' });
+    if (!requester || requester.active === false || requester.role !== 'researcher') {
+      return res.status(409).json({ error: 'The requesting researcher account is no longer active.' });
+    }
 
     const approvedNames = [];
     if (decision === 'approved') {
       for (const evidenceId of evidenceIds) {
         const evidence = caseItem.evidence.id(evidenceId);
         if (!evidence || evidence.deleted || evidence.visibleToResearchers === true ||
+            (evidence.researcherAccessIds || []).some(id => String(id) === String(accessRequest.requesterId)) ||
             evidence.deletionRequest?.status === 'pending') {
           return res.status(400).json({ error: 'One or more selected items are no longer eligible for individual research access.' });
         }
