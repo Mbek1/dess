@@ -50,6 +50,8 @@ function discussionView(item, currentUserId, profiles) {
     isMine: String(item.authorId) === String(currentUserId),
     replies: (item.replies || []).map(reply => ({
       ...reply,
+      content: reply.moderationStatus === 'hidden' ? 'This contribution is temporarily hidden by a moderator.' : reply.content,
+      isModerated: reply.moderationStatus === 'hidden',
       author: authorView(reply, currentUserId, profiles),
       isMine: String(reply.authorId) === String(currentUserId)
     }))
