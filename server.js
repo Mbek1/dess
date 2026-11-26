@@ -181,6 +181,7 @@ app.use('/api/notifications', require('./routes/notifications'));
 // Researcher functionality
 app.use('/api/researcher', require('./routes/researcher'));
 app.use('/api/research-workspace', require('./routes/research-workspace'));
+app.use('/api/repository-collaboration', require('./routes/repository-collaboration'));
 
 // Administration
 app.use('/api/admin', require('./routes/admin'));
