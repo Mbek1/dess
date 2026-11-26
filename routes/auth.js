@@ -62,7 +62,7 @@ function createTokens(user, sessionId) {
 // Public registration remains limited to investigator and researcher accounts.
 router.post('/signup', async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, userType, organizationName } = req.body;
     if (!name || !email || !password || !role) {
       return res.status(400).json({ error: 'All fields are required.' });
     }
@@ -72,14 +72,40 @@ router.post('/signup', async (req, res) => {
     if (String(password).length < 8) {
       return res.status(400).json({ error: 'Password must contain at least 8 characters.' });
     }
+    if (role === 'researcher') {
+      if (!['student', 'researcher'].includes(userType)) {
+        return res.status(400).json({ error: 'Select whether you are a student or researcher.' });
+      }
+      if (!String(organizationName || '').trim()) {
+        return res.status(400).json({ error: 'Enter your university or organisation name.' });
+      }
+    }
     const normalizedEmail = String(email).trim().toLowerCase();
     const existing = await User.findOne({ email: normalizedEmail });
     if (existing) return res.status(409).json({ error: 'Email already registered.' });
     const hashed = await bcrypt.hash(password, 12);
-    const user = await User.create({ name: String(name).trim(), email: normalizedEmail, password: hashed, role });
+    const user = await User.create({
+      name: String(name).trim(),
+      email: normalizedEmail,
+      password: hashed,
+      role,
+      ...(role === 'researcher' ? {
+        userType,
+        organizationName: String(organizationName).trim(),
+        organizationRole: userType === 'student' ? 'Student' : 'Researcher'
+      } : {})
+    });
     return res.status(201).json({
       message: 'Signup successful',
-      user: { id: user._id, name: user.name, email: user.email, role: user.role }
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        userType: user.userType || '',
+        organizationName: user.organizationName || '',
+        organizationRole: user.organizationRole || ''
+      }
     });
   } catch (err) {
     logger.error('Error during signup:', err.message);

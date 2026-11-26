@@ -16,6 +16,7 @@ const UserSchema = new mongoose.Schema({
   password: { type: String, required: true },
   role: { type: String, enum: ['researcher', 'investigator', 'admin'], required: true },
   active: { type: Boolean, default: true },
+  userType: { type: String, enum: ['student', 'researcher', null], default: null },
   organizationName: { type: String, default: '' },
   organizationRole: { type: String, default: '' },
   organizationIdNumber: { type: String, default: '' },
