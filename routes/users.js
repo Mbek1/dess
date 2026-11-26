@@ -172,6 +172,7 @@ router.get('/:id', async (req, res) => {
       role: user.role,
       userType: user.userType || '',
       organizationName: user.organizationName || '',
+      organizationId: user.organizationId || null,
       organizationRole: user.organizationRole || '',
       organizationIdNumber: user.organizationIdNumber || '',
       profilePicture: user.profilePicture || '',
@@ -322,6 +323,7 @@ router.patch('/:id', authenticateToken, async (req, res) => {
       role: user.role,
       userType: user.userType || '',
       organizationName: user.organizationName,
+      organizationId: user.organizationId || null,
       organizationRole: user.organizationRole,
       organizationIdNumber: user.organizationIdNumber,
       profilePicture: user.profilePicture || ''
