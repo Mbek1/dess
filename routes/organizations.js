@@ -13,7 +13,7 @@ function requireUser(req, res, next) {
 }
 function isAdmin(req) { return req.user?.role === 'admin'; }
 function publicOrganization(org, userId, admin = false) {
-  const membership = org.members.find(item => String(item.user) === String(userId));
+  const membership = org.members.find(item => String(item.user?._id || item.user) === String(userId));
   return {
     _id: org._id, name: org.name, type: org.type, description: org.description,
     website: org.website, location: org.location, verificationStatus: org.verificationStatus,
