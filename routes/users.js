@@ -172,6 +172,7 @@ router.get('/:id', async (req, res) => {
       role: user.role,
       userType: user.userType || '',
       organizationName: user.organizationName || '',
+      organizationId: user.organizationId || null,
       organizationRole: user.organizationRole || '',
       organizationIdNumber: user.organizationIdNumber || '',
       profilePicture: user.profilePicture || '',
@@ -307,7 +308,7 @@ router.patch('/:id', authenticateToken, async (req, res) => {
       }
       user.userType = userType;
     }
-    if (organizationName !== undefined) user.organizationName = organizationName;
+    if (organizationName !== undefined && (!user.organizationId || req.user.role === 'admin')) user.organizationName = organizationName;
     if (organizationRole !== undefined) user.organizationRole = organizationRole;
     if (organizationIdNumber !== undefined) user.organizationIdNumber = organizationIdNumber;
     if (req.body.profilePicture !== undefined) user.profilePicture = req.body.profilePicture;
@@ -322,6 +323,7 @@ router.patch('/:id', authenticateToken, async (req, res) => {
       role: user.role,
       userType: user.userType || '',
       organizationName: user.organizationName,
+      organizationId: user.organizationId || null,
       organizationRole: user.organizationRole,
       organizationIdNumber: user.organizationIdNumber,
       profilePicture: user.profilePicture || ''

@@ -18,6 +18,7 @@ const UserSchema = new mongoose.Schema({
   active: { type: Boolean, default: true },
   userType: { type: String, enum: ['student', 'researcher', null], default: null },
   organizationName: { type: String, default: '' },
+  organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', default: null },
   organizationRole: { type: String, default: '' },
   organizationIdNumber: { type: String, default: '' },
   profilePicture: { type: String, default: '' },
