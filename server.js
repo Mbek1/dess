@@ -180,6 +180,7 @@ app.use('/api/notifications', require('./routes/notifications'));
 
 // Researcher functionality
 app.use('/api/researcher', require('./routes/researcher'));
+app.use('/api/research-workspace', require('./routes/research-workspace'));
 
 // Administration
 app.use('/api/admin', require('./routes/admin'));
