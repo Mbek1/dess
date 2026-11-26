@@ -225,8 +225,8 @@ router.get('/export', async (req, res) => {
       '<h2>Collections</h2>' + workspace.collections.map(item => '<section><h3>' + escapeHtml(item.name) + '</h3><p>' + escapeHtml(item.description) + '</p><p>Cases saved: ' + item.caseIds.length + '</p></section>').join('')
     ];
     const document = '<!doctype html><html><head><meta charset="utf-8"><title>DESS Research Workspace</title><style>body{font-family:Arial,sans-serif;line-height:1.55;color:#18283c;margin:40px}h1,h2{color:#12365a}section{border-bottom:1px solid #ddd;padding:10px 0}</style></head><body>' + sections.join('') + '</body></html>';
-    res.setHeader('Content-Type', 'application/msword; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="DESS-Research-Workspace.doc"');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="DESS-Research-Workspace.html"');
     res.send(document);
   } catch (error) {
     res.status(500).json({ error: 'Could not export research workspace' });
