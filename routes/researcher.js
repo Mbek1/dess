@@ -103,12 +103,11 @@ router.get('/cases', authenticateToken, async (req, res) => {
     }
 
     const cases = closedCases.map(sanitizeResearcherCase);
-    const evidenceTypes = [...new Set(closedCases.flatMap(item =>
-      item.evidence
-        .filter(evidence => !evidence.deleted && evidence.visibleToResearchers === true)
-        .map(evidence => evidence.type)
-        .filter(Boolean)
-    ))].sort((a, b) => a.localeCompare(b));
+    const evidenceTypes = (await Case.distinct('evidence.type', {
+      status: 'closed',
+      'evidence.deleted': { $ne: true },
+      'evidence.visibleToResearchers': true
+    })).filter(Boolean).sort((a, b) => a.localeCompare(b));
     const organizations = [...new Set(await User.distinct('organizationName', {
       role: 'investigator',
       organizationName: { $exists: true, $ne: '' }
