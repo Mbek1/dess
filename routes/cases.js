@@ -675,6 +675,54 @@ router.post('/:id/evidence/:evidenceId/verify', requireInvestigatorCaseAccess, a
   }
 });
 
+// GET /api/cases/:id/evidence/:evidenceId/chain-of-custody
+// Returns the chronological, case-team-only record of actions for one evidence item.
+router.get('/:id/evidence/:evidenceId/chain-of-custody', requireInvestigatorCaseAccess, async (req, res) => {
+  try {
+    const caseItem = req.caseItem;
+    const evidence = caseItem.evidence.id(req.params.evidenceId);
+    if (!evidence) return res.status(404).json({ error: 'Evidence not found' });
+
+    const events = caseItem.auditLog
+      .filter(entry => entry.filename === evidence.filename)
+      .map(entry => ({
+        id: entry._id,
+        action: entry.action,
+        type: entry.type,
+        description: entry.description,
+        occurredAt: entry.date,
+        performedBy: {
+          userId: entry.performedBy?.userId,
+          name: entry.performedBy?.name || 'Unknown user'
+        },
+        details: entry.details || {}
+      }))
+      .sort((a, b) => new Date(a.occurredAt || 0) - new Date(b.occurredAt || 0));
+
+    res.json({
+      evidence: {
+        id: evidence._id,
+        name: evidence.name,
+        filename: evidence.filename,
+        originalName: evidence.originalName,
+        fileSize: evidence.fileSize,
+        hashAlgorithm: 'SHA-256',
+        hash: evidence.hash,
+        integrityStatus: evidence.integrityStatus || 'not_checked',
+        uploadedAt: evidence.uploadedAt,
+        deleted: evidence.deleted,
+        deletedAt: evidence.deletedAt || null,
+        deletedReason: evidence.deletedReason || null
+      },
+      eventCount: events.length,
+      events
+    });
+  } catch (err) {
+    logger.error('Failed to retrieve evidence chain of custody:', err.message);
+    res.status(500).json({ error: 'Failed to retrieve evidence chain of custody' });
+  }
+});
+
 // GET /api/cases/:id/evidence/:evidenceId/file - authenticated investigator evidence viewer
 router.get('/:id/evidence/:evidenceId/file', requireInvestigatorCaseAccess, async (req, res) => {
   try {
@@ -684,19 +732,19 @@ router.get('/:id/evidence/:evidenceId/file', requireInvestigatorCaseAccess, asyn
     const filePath = getUploadedEvidencePath(evidence.filename);
     if (!filePath) return res.status(404).json({ error: 'Evidence file not found' });
 
+    const mimeType = /^[\w.+-]+\/[\w.+-]+$/.test(evidence.mimeType || '') ? evidence.mimeType : 'application/octet-stream';
+    const safeInline = mimeType.startsWith('image/') || mimeType.startsWith('audio/') || mimeType.startsWith('video/') || mimeType === 'application/pdf' || mimeType === 'text/plain';
     const viewer = await User.findById(req.user.id).select('name email');
     caseItem.auditLog.push({
-      action: 'EVIDENCE_VIEW',
+      action: safeInline ? 'EVIDENCE_VIEW' : 'EVIDENCE_DOWNLOAD',
       type: 'evidence_access',
       filename: evidence.filename,
-      description: `Evidence "${evidence.name}" viewed`,
+      description: `Evidence "${evidence.name}" ${safeInline ? 'viewed' : 'download requested'}`,
       performedBy: { userId: viewer._id, name: viewer.name, email: viewer.email },
-      details: { evidenceId: evidence._id }
+      details: { evidenceId: evidence._id, deliveryMode: safeInline ? 'inline' : 'attachment' }
     });
     await caseItem.save();
 
-    const mimeType = /^[\w.+-]+\/[\w.+-]+$/.test(evidence.mimeType || '') ? evidence.mimeType : 'application/octet-stream';
-    const safeInline = mimeType.startsWith('image/') || mimeType.startsWith('audio/') || mimeType.startsWith('video/') || mimeType === 'application/pdf' || mimeType === 'text/plain';
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Disposition', `${safeInline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(evidence.originalName || evidence.name)}`);
     res.setHeader('Cache-Control', 'private, no-store');
