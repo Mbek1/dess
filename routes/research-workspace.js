@@ -42,7 +42,33 @@ async function getResearchableCase(caseId, evidenceId, userId) {
 router.get('/', async (req, res) => {
   try {
     const workspace = await getWorkspace(req.user.id);
-    res.json(workspace);
+    const result = workspace.toObject();
+    const caseIds = [...new Set(result.bookmarks.map(item => String(item.caseId)))];
+    const cases = caseIds.length ? await Case.find({ _id: { $in: caseIds } })
+      .select('_id caseId name status repositoryStatus evidence').lean() : [];
+    const caseMap = new Map(cases.map(item => [String(item._id), item]));
+    result.bookmarks = result.bookmarks.filter(bookmark => {
+      const caseItem = caseMap.get(String(bookmark.caseId));
+      if (!caseItem || caseItem.status !== 'closed' || ['under_review', 'hidden'].includes(caseItem.repositoryStatus || 'visible')) return false;
+      if (!bookmark.evidenceId) return true;
+      const evidence = (caseItem.evidence || []).find(item => String(item._id) === String(bookmark.evidenceId));
+      return Boolean(evidence && !evidence.deleted && (
+        evidence.visibleToResearchers === true ||
+        (evidence.researcherAccessIds || []).some(id => String(id?._id || id) === String(req.user.id))
+      ));
+    }).map(bookmark => {
+      const caseItem = caseMap.get(String(bookmark.caseId));
+      if (caseItem) {
+        bookmark.caseReference = caseItem.caseId;
+        bookmark.caseTitle = caseItem.name;
+        if (bookmark.evidenceId) {
+          const evidence = (caseItem.evidence || []).find(item => String(item._id) === String(bookmark.evidenceId));
+          bookmark.evidenceName = evidence?.name || '';
+        }
+      }
+      return bookmark;
+    });
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: 'Could not load research workspace' });
   }
@@ -92,7 +118,7 @@ router.post('/notes', async (req, res) => {
     if (!String(title || '').trim() || !String(content || '').trim()) {
       return res.status(400).json({ error: 'A note title and content are required' });
     }
-    const access = await getResearchableCase(caseId, evidenceId);
+    const access = await getResearchableCase(caseId, evidenceId, req.user.id);
     if (access.error) return res.status(access.status).json({ error: access.error });
     const workspace = await getWorkspace(req.user.id);
     workspace.notes.push({
