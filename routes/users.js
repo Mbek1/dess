@@ -149,7 +149,7 @@ router.get('/', authenticateToken, async (req, res) => {
       ];
     }
 
-    const users = await User.find(query, 'name email role organizationName organizationRole profilePicture _id').limit(20);
+    const users = await User.find(query, 'name email role userType organizationName organizationRole profilePicture _id').limit(20);
     res.json(users);
   } catch (err) {
     logger.error('Error fetching users:', err.message);
@@ -170,6 +170,7 @@ router.get('/:id', async (req, res) => {
       name: user.name, 
       email: user.email, 
       role: user.role,
+      userType: user.userType || '',
       organizationName: user.organizationName || '',
       organizationRole: user.organizationRole || '',
       organizationIdNumber: user.organizationIdNumber || '',
@@ -276,7 +277,7 @@ router.patch('/:id', authenticateToken, async (req, res) => {
     if (req.user.id !== req.params.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Not authorized to update this user' });
     }
-    const { name, email, password, organizationName, organizationRole, organizationIdNumber } = req.body;
+    const { name, email, password, userType, organizationName, organizationRole, organizationIdNumber } = req.body;
     const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -297,6 +298,15 @@ router.patch('/:id', authenticateToken, async (req, res) => {
     if (password) {
       user.password = await bcrypt.hash(password, 10);
     }
+    if (userType !== undefined) {
+      if (!['student', 'researcher'].includes(userType)) {
+        return res.status(400).json({ error: 'User type must be student or researcher.' });
+      }
+      if (user.role !== 'researcher') {
+        return res.status(400).json({ error: 'User type applies to Case Repository accounts only.' });
+      }
+      user.userType = userType;
+    }
     if (organizationName !== undefined) user.organizationName = organizationName;
     if (organizationRole !== undefined) user.organizationRole = organizationRole;
     if (organizationIdNumber !== undefined) user.organizationIdNumber = organizationIdNumber;
@@ -310,6 +320,7 @@ router.patch('/:id', authenticateToken, async (req, res) => {
       name: user.name, 
       email: user.email, 
       role: user.role,
+      userType: user.userType || '',
       organizationName: user.organizationName,
       organizationRole: user.organizationRole,
       organizationIdNumber: user.organizationIdNumber,
