@@ -9,6 +9,21 @@ const EvidenceSchema = new mongoose.Schema({
   description: { type: String, required: true },
   hash: { type: String, required: true },
   format: { type: String, required: true },
+  fileSize: { type: Number, default: 0 },
+  integrityStatus: {
+    type: String,
+    enum: ['not_checked', 'verified', 'mismatch', 'missing'],
+    default: 'not_checked'
+  },
+  verificationHistory: [{
+    verifiedAt: { type: Date, default: Date.now },
+    verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    verifiedByName: { type: String, default: '' },
+    storedHash: { type: String, required: true },
+    calculatedHash: { type: String, default: '' },
+    matches: { type: Boolean, required: true },
+    status: { type: String, enum: ['verified', 'mismatch', 'missing'], required: true }
+  }],
   uploadedAt: { type: Date, default: Date.now },
   visibleToResearchers: { type: Boolean, default: false },
   deletionRequest: {

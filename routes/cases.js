@@ -543,6 +543,9 @@ router.post('/:id/evidence', requireInvestigatorCaseAccess, async (req, res) => 
       description,
       hash,
       format,
+      fileSize: fs.statSync(filePath).size,
+      integrityStatus: 'not_checked',
+      verificationHistory: [],
       visibleToResearchers: false
     });
     caseItem.evidence.push(evidence);
@@ -588,7 +591,13 @@ router.post('/:id/upload-evidence', requireInvestigatorCaseAccess, evidenceUploa
       return res.status(400).json({ error: 'No file uploaded' });
     }
     const hash = await calculateSha256(req.file.path);
-    res.json({ filename: req.file.filename, hash, originalName: req.file.originalname, mimeType: req.file.mimetype });
+    res.json({
+      filename: req.file.filename,
+      hash,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      fileSize: req.file.size
+    });
   } catch (err) {
     logger.error('Failed to upload evidence file:', err.message);
     res.status(500).json({ error: 'Failed to upload evidence file' });
@@ -602,13 +611,45 @@ router.post('/:id/evidence/:evidenceId/verify', requireInvestigatorCaseAccess, a
     const evidence = caseItem.evidence.id(req.params.evidenceId);
     if (!evidence) return res.status(404).json({ error: 'Evidence not found' });
     const filePath = getUploadedEvidencePath(evidence.filename);
-    if (!filePath || !fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Evidence file not found' });
-    }
-    const calculatedHash = await calculateSha256(filePath);
-    const matches = calculatedHash === evidence.hash;
     const verifier = await User.findById(req.user.id).select('name email');
     if (!verifier) return res.status(401).json({ error: 'Authenticated user not found' });
+
+    if (!filePath || !fs.existsSync(filePath)) {
+      evidence.integrityStatus = 'missing';
+      evidence.verificationHistory.push({
+        verifiedAt: new Date(),
+        verifiedBy: verifier._id,
+        verifiedByName: verifier.name,
+        storedHash: evidence.hash,
+        calculatedHash: '',
+        matches: false,
+        status: 'missing'
+      });
+      caseItem.auditLog.push({
+        action: 'HASH_VERIFY',
+        type: 'integrity_check',
+        filename: evidence.filename,
+        description: `SHA-256 verification could not locate evidence "${evidence.name}"`,
+        performedBy: { userId: verifier._id, name: verifier.name, email: verifier.email },
+        details: { storedHash: evidence.hash, calculatedHash: null, matches: false, status: 'missing' }
+      });
+      await caseItem.save();
+      return res.status(404).json({ error: 'Evidence file not found', status: 'missing', matches: false });
+    }
+
+    const calculatedHash = await calculateSha256(filePath);
+    const matches = calculatedHash === evidence.hash;
+    const status = matches ? 'verified' : 'mismatch';
+    evidence.integrityStatus = status;
+    evidence.verificationHistory.push({
+      verifiedAt: new Date(),
+      verifiedBy: verifier._id,
+      verifiedByName: verifier.name,
+      storedHash: evidence.hash,
+      calculatedHash,
+      matches,
+      status
+    });
 
     caseItem.auditLog.push({
       action: 'HASH_VERIFY',
@@ -616,11 +657,18 @@ router.post('/:id/evidence/:evidenceId/verify', requireInvestigatorCaseAccess, a
       filename: evidence.filename,
       description: `SHA-256 verification ${matches ? 'passed' : 'failed'} for evidence "${evidence.name}"`,
       performedBy: { userId: verifier._id, name: verifier.name, email: verifier.email },
-      details: { storedHash: evidence.hash, calculatedHash, matches }
+      details: { storedHash: evidence.hash, calculatedHash, matches, status }
     });
     await caseItem.save();
 
-    res.json({ matches, storedHash: evidence.hash, calculatedHash });
+    res.json({
+      matches,
+      status,
+      storedHash: evidence.hash,
+      calculatedHash,
+      verifiedAt: evidence.verificationHistory[evidence.verificationHistory.length - 1].verifiedAt,
+      verifiedBy: verifier.name
+    });
   } catch (err) {
     logger.error('Failed to verify evidence hash:', err.message);
     res.status(500).json({ error: 'Failed to verify evidence integrity' });
