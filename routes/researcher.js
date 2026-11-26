@@ -61,7 +61,21 @@ router.get('/cases', authenticateToken, async (req, res) => {
         { name: expression },
         { caseId: expression },
         { description: expression },
-        { keywords: expression }
+        { keywords: expression },
+        {
+          evidence: {
+            $elemMatch: {
+              deleted: { $ne: true },
+              visibleToResearchers: true,
+              $or: [
+                { name: expression },
+                { description: expression },
+                { type: expression },
+                { format: expression }
+              ]
+            }
+          }
+        }
       ];
     }
     if (['civil', 'criminal'].includes(caseType)) query.caseType = caseType;
@@ -143,7 +157,7 @@ router.get('/cases/:id/related', authenticateToken, async (req, res) => {
     const sourceText = [current.name, current.description, current.keywords, current.caseId]
       .filter(Boolean).join(' ').toLowerCase();
     const terms = [...new Set(sourceText.match(/[a-z0-9]{4,}/g) || [])]
-      .filter(term => !['case', 'evidence', 'with', 'from', 'that', 'this', 'have', 'were', 'into'].includes(term))
+      .filter(term => !/^\\d+$/.test(term) && !['case', 'evidence', 'with', 'from', 'that', 'this', 'have', 'were', 'into'].includes(term))
       .slice(0, 12);
 
     const candidateQuery = {
@@ -175,12 +189,12 @@ router.get('/cases/:id/related', authenticateToken, async (req, res) => {
       const sharedTypes = [...currentEvidenceTypes].filter(type => candidateTypes.has(type));
       const sameCategory = candidate.caseType === current.caseType;
       const score = (sameCategory ? 2 : 0) + sharedTerms.length + sharedTypes.length * 2;
-      return { candidate, score, reasons: [
+      return { candidate, score, sharedTerms, sharedTypes, reasons: [
         ...(sameCategory ? ['Same case classification'] : []),
         ...(sharedTypes.length ? ['Shared evidence type: ' + sharedTypes.join(', ')] : []),
         ...(sharedTerms.length ? ['Related terms: ' + sharedTerms.slice(0, 4).join(', ')] : [])
       ] };
-    }).filter(item => item.score > 0)
+    }).filter(item => item.sharedTerms?.length || item.sharedTypes?.length)
       .sort((a, b) => b.score - a.score || new Date(b.candidate.updatedAt) - new Date(a.candidate.updatedAt))
       .slice(0, 5);
 
