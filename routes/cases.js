@@ -732,19 +732,19 @@ router.get('/:id/evidence/:evidenceId/file', requireInvestigatorCaseAccess, asyn
     const filePath = getUploadedEvidencePath(evidence.filename);
     if (!filePath) return res.status(404).json({ error: 'Evidence file not found' });
 
+    const mimeType = /^[\w.+-]+\/[\w.+-]+$/.test(evidence.mimeType || '') ? evidence.mimeType : 'application/octet-stream';
+    const safeInline = mimeType.startsWith('image/') || mimeType.startsWith('audio/') || mimeType.startsWith('video/') || mimeType === 'application/pdf' || mimeType === 'text/plain';
     const viewer = await User.findById(req.user.id).select('name email');
     caseItem.auditLog.push({
-      action: 'EVIDENCE_VIEW',
+      action: safeInline ? 'EVIDENCE_VIEW' : 'EVIDENCE_DOWNLOAD',
       type: 'evidence_access',
       filename: evidence.filename,
-      description: `Evidence "${evidence.name}" viewed`,
+      description: \`Evidence "\${evidence.name}" \${safeInline ? 'viewed' : 'download requested'}\`,
       performedBy: { userId: viewer._id, name: viewer.name, email: viewer.email },
-      details: { evidenceId: evidence._id }
+      details: { evidenceId: evidence._id, deliveryMode: safeInline ? 'inline' : 'attachment' }
     });
     await caseItem.save();
 
-    const mimeType = /^[\w.+-]+\/[\w.+-]+$/.test(evidence.mimeType || '') ? evidence.mimeType : 'application/octet-stream';
-    const safeInline = mimeType.startsWith('image/') || mimeType.startsWith('audio/') || mimeType.startsWith('video/') || mimeType === 'application/pdf' || mimeType === 'text/plain';
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Disposition', `${safeInline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(evidence.originalName || evidence.name)}`);
     res.setHeader('Cache-Control', 'private, no-store');
