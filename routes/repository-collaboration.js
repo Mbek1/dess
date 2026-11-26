@@ -28,20 +28,29 @@ async function getActor(userId) {
   return User.findById(userId).select('name role userType organizationName active');
 }
 
-function discussionView(item, currentUserId, profiles) {
+function authorView(item, currentUserId, profiles) {
   const userId = String(item.authorId);
   const profile = profiles.get(userId);
   return {
+    _id: userId,
+    name: item.authorName,
+    userType: item.authorUserType || profile?.userType || null,
+    organizationName: item.organizationName || profile?.organizationName || '',
+    profilePicture: profile?.profilePicture || '',
+    isMine: userId === String(currentUserId)
+  };
+}
+
+function discussionView(item, currentUserId, profiles) {
+  return {
     ...item,
-    author: {
-      _id: userId,
-      name: item.authorName,
-      userType: item.authorUserType || profile?.userType || null,
-      organizationName: item.organizationName || profile?.organizationName || '',
-      profilePicture: profile?.profilePicture || ''
-    },
-    isMine: userId === String(currentUserId),
-    replies: item.replies || []
+    author: authorView(item, currentUserId, profiles),
+    isMine: String(item.authorId) === String(currentUserId),
+    replies: (item.replies || []).map(reply => ({
+      ...reply,
+      author: authorView(reply, currentUserId, profiles),
+      isMine: String(reply.authorId) === String(currentUserId)
+    }))
   };
 }
 
