@@ -766,6 +766,8 @@ router.patch('/:id/evidence/:evidenceId/visibility', requireInvestigatorCaseAcce
 
     const actor = await User.findById(req.user.id).select('name email');
     evidence.visibleToResearchers = req.body.visibleToResearchers;
+    // A global visibility change supersedes and clears researcher-specific grants.
+    evidence.researcherAccessIds = [];
     caseItem.auditLog.push({
       action: 'EVIDENCE_VISIBILITY',
       type: 'access_control',
