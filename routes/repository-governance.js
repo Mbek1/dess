@@ -147,7 +147,7 @@ router.get('/access-requests/inbox', async (req, res) => {
   try {
     if (!isInvestigator(req)) return res.status(403).json({ error: 'Investigator access required.' });
     const assignedCases = await Case.find({ 'team.id': req.user.id, status: 'closed' })
-      .select('_id caseId name repositoryStatus evidence');
+      .select('_id caseId name status repositoryStatus evidence');
     const caseById = new Map(assignedCases.map(item => [String(item._id), item]));
     const requests = await RepositoryAccessRequest.find({
       caseId: { $in: assignedCases.filter(isRepositoryCaseVisible).map(item => item._id) },
@@ -200,7 +200,7 @@ router.patch('/access-requests/:requestId/review', async (req, res) => {
       User.findById(req.user.id).select('name email role active')
     ]);
     if (!caseItem || !isAssigned(caseItem, req.user.id)) return res.status(403).json({ error: 'You are not assigned to this case.' });
-    if (caseItem.status !== 'closed') return res.status(409).json({ error: 'The case is no longer in the research archive.' });
+    if (!isRepositoryCaseVisible(caseItem)) return res.status(409).json({ error: 'The case is no longer available in the research archive.' });
     if (!actor || actor.active === false) return res.status(403).json({ error: 'An active investigator account is required.' });
 
     const approvedNames = [];
@@ -489,7 +489,7 @@ router.patch('/admin/contributions/:contributionId/moderation', async (req, res)
     contribution.moderatedBy = actor?._id || req.user.id;
     contribution.moderatedAt = new Date();
     await contribution.save();
-    if (caseItem) {
+    if (caseItem && actor) {
       appendCaseAudit(caseItem, actor, 'REPOSITORY_CONTRIBUTION_MODERATION',
         `A repository contribution was changed from ${previousStatus} to ${status}`,
         { contributionId: String(contribution._id), authorId: String(contribution.authorId), status, reason });
