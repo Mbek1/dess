@@ -160,9 +160,16 @@ router.patch('/:id/verification', requireUser, async (req, res) => {
     if (!isAdmin(req)) return res.status(403).json({ error: 'Administrator access required.' });
     const status = req.body.status;
     if (!['verified', 'rejected', 'pending'].includes(status)) return res.status(400).json({ error: 'Invalid verification status.' });
-    const org = await Organization.findByIdAndUpdate(req.params.id, { verificationStatus: status }, { new: true });
+    const org = await Organization.findById(req.params.id);
     if (!org) return res.status(404).json({ error: 'Organization not found' });
-    res.json({ organization: publicOrganization(org, req.user.id) });
+    org.verificationStatus = status;
+    if (status === 'rejected') {
+      const memberIds = org.members.filter(item => item.status === 'approved').map(item => item.user);
+      await User.updateMany({ _id: { $in: memberIds }, organizationId: org._id }, { $unset: { organizationId: 1 }, $set: { organizationName: '' } });
+      org.members.forEach(item => { if (item.status === 'approved') { item.status = 'rejected'; item.reviewedAt = new Date(); item.reviewedBy = req.user.id; } });
+    }
+    await org.save();
+    res.json({ organization: publicOrganization(org, req.user.id, true) });
   } catch (err) { res.status(500).json({ error: 'Could not update organization verification' }); }
 });
 
