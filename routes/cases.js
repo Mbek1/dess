@@ -739,7 +739,7 @@ router.get('/:id/evidence/:evidenceId/file', requireInvestigatorCaseAccess, asyn
       action: safeInline ? 'EVIDENCE_VIEW' : 'EVIDENCE_DOWNLOAD',
       type: 'evidence_access',
       filename: evidence.filename,
-      description: \`Evidence "\${evidence.name}" \${safeInline ? 'viewed' : 'download requested'}\`,
+      description: `Evidence "${evidence.name}" ${safeInline ? 'viewed' : 'download requested'}`,
       performedBy: { userId: viewer._id, name: viewer.name, email: viewer.email },
       details: { evidenceId: evidence._id, deliveryMode: safeInline ? 'inline' : 'attachment' }
     });
